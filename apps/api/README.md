@@ -18,7 +18,8 @@ npm run dev                # http://localhost:3001, docs at /docs
 ```
 
 Required for Day 1 (upload loop): `DATABASE_URL`, `R2_*`.
-Required for Day 2 (pipeline): `REDIS_URL`, `REMOVEBG_API_KEY`, `REPLICATE_API_TOKEN`.
+Required for Day 2 (pipeline): `REDIS_URL` (must be `rediss://`, TLS — Upstash rejects plain
+`redis://`), `REMOVEBG_API_KEY`. Portrait generation needs no key (free HF Space).
 
 Without a given key set, the server still boots (so you can browse `/docs`) — the specific
 routes/steps that need it fail clearly instead (a 500, a 503 on `/status`, or a skipped
@@ -47,7 +48,7 @@ and persisting its result:
 1. **validate** — exactly one face detected + minimum resolution
 2. **remove_bg** — background removed via remove.bg, stored as `noBgKey`
 3. **skin_tone** — sampled from the face region, stored as `skinToneHex`
-4. **portrait** — illustrated portrait via Replicate, stored as `portraitKey`
+4. **portrait** — illustrated portrait via a free Hugging Face Space, stored as `portraitKey`
 
 Any step failure sets `status = failed` and emits an SSE `error` event with a user-facing
 message. **Coming Day 3:** `composite` (portrait onto scene template → `previewKey`) and the
@@ -59,11 +60,17 @@ message. **Coming Day 3:** `composite` (portrait onto scene template → `previe
   `face-api.js`, which requires the native `canvas` package — a real native-build risk on
   Windows under a 3-day deadline. Gives bounding boxes (no landmarks), which is all "exactly
   one usable face" validation needs.
-- **Portrait model:** `zsxkib/instant-id-basic` on Replicate, called via the "run by name"
-  endpoint (`POST /v1/models/{owner}/{name}/predictions`), so no pinned version hash is
-  required — `REPLICATE_MODEL_VERSION` is an optional `owner/name` override. The style
-  prompt is a placeholder (`src/pipeline/portrait.ts`) pending the client's actual style
-  references; expect to iterate here per the plan's flagged risk.
+- **Portrait model:** no card/budget available, so this uses the free public Hugging Face
+  Space `InstantX/InstantID` (same InstantID technique originally planned for Replicate),
+  called via Gradio's HTTP API (upload → call → poll → download), rather than a paid API.
+  Verified end-to-end with a real photo — produces genuinely good watercolor-style,
+  identity-preserving results. Trade-off: shared free GPU queue, so latency varies a lot
+  (observed: a few seconds in one run, several minutes in another under load); the poll
+  request uses a 15-minute `undici` timeout (not the 5-minute Node default) to tolerate
+  that. It's also a community-maintained demo that could change or go down without notice —
+  if that becomes a problem, swap to a paid model (Replicate code preserved in git history
+  at the commit before this change). The style prompt/preset ("Watercolor") is a first pass
+  pending the client's actual style references; expect to iterate per the plan's flagged risk.
 - **Job retries:** single job per session, `attempts: 1` (no automatic retry) rather than
   the plan's per-step retry policy — differentiating retry behavior per step would need
   BullMQ flows (multiple linked jobs), which is more machinery than a 3-day prototype

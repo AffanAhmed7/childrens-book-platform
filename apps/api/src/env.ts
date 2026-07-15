@@ -15,8 +15,6 @@ export const env = {
   R2_BUCKET_NAME: readOptional("R2_BUCKET_NAME"),
   REDIS_URL: readOptional("REDIS_URL"),
   REMOVEBG_API_KEY: readOptional("REMOVEBG_API_KEY"),
-  REPLICATE_API_TOKEN: readOptional("REPLICATE_API_TOKEN"),
-  REPLICATE_MODEL_VERSION: readOptional("REPLICATE_MODEL_VERSION"),
   CORS_ORIGIN: readOptional("CORS_ORIGIN") ?? "http://localhost:3000",
   PORT: Number(readOptional("PORT") ?? "3001"),
 };

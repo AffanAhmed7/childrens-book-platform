@@ -2,13 +2,17 @@
 // live SSE status stream through validate -> remove_bg -> skin_tone -> portrait.
 //
 // Usage: node test/e2e-day2.mjs ./path/to/photo.jpg
-// Requires the API server running (npm run dev) with REDIS_URL, R2, remove.bg
-// and Replicate all configured in apps/api/.env.
+// Requires the API server running (npm run dev) with REDIS_URL, R2 and
+// remove.bg configured in apps/api/.env. Portrait generation runs on a free
+// Hugging Face Space with variable latency (seconds to several minutes) — this
+// script uses a long-timeout dispatcher so it doesn't give up early.
 
 import { readFile } from "node:fs/promises";
+import { Agent, fetch as undiciFetch } from "undici";
 
 const baseUrl = process.env.API_BASE_URL ?? "http://localhost:3001";
 const photoPath = process.argv[2];
+const longPollAgent = new Agent({ headersTimeout: 15 * 60 * 1000, bodyTimeout: 15 * 60 * 1000 });
 
 if (!photoPath) {
   console.error("Usage: node test/e2e-day2.mjs <path-to-photo.jpg>");
@@ -16,8 +20,9 @@ if (!photoPath) {
 }
 
 async function listenToStatus(sessionId) {
-  const response = await fetch(`${baseUrl}/api/sessions/${sessionId}/status`, {
+  const response = await undiciFetch(`${baseUrl}/api/sessions/${sessionId}/status`, {
     headers: { Accept: "text/event-stream" },
+    dispatcher: longPollAgent,
   });
   if (!response.ok || !response.body) {
     throw new Error(`Failed to open status stream: ${response.status}`);
