@@ -1,0 +1,31 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Session {
+  id        String     @id @default(uuid())
+  locale    String     @default("fr")
+  storyId   String
+  childName String
+  status    String     @default("created") // created | uploaded | validated | processing | done | failed
+  createdAt DateTime   @default(now())
+  character Character?
+}
+
+model Character {
+  id          String  @id @default(uuid())
+  sessionId   String  @unique
+  session     Session @relation(fields: [sessionId], references: [id])
+  role        String  @default("child")
+  rawKey      String? // R2 key, original upload
+  noBgKey     String? // after remove.bg
+  skinToneHex String? // sampled skin tone
+  portraitKey String? // illustrated asset, transparent bg
+  previewKey  String? // final composited preview
+  jobId       String? // BullMQ job id for status lookup
+}

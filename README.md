@@ -19,11 +19,10 @@ upload → face validation → background removal → portrait generation
 childrens-book-platform/
 ├── PROJECT_PLAN.md      # master engineering plan (scope, schedule, risks, acceptance)
 ├── README.md            # you are here
-├── .env.example         # required environment variables (no secrets)
 ├── docs/
-│   └── CLIENT_UPDATE.md # client-facing progress note
+│   └── CLIENT_UPDATE.md # client-facing progress note (local-only, git-ignored)
 ├── apps/
-│   ├── api/             # Fastify + TypeScript backend, BullMQ worker, SSE, OpenAPI
+│   ├── api/             # Fastify + TypeScript backend (.env.example lives here), BullMQ worker, SSE, OpenAPI
 │   └── web/             # (DEFERRED) Next.js test UI — API-only engagement this phase
 ├── packages/
 │   └── shared/          # shared TS types, status vocabulary, user-facing copy
@@ -40,17 +39,19 @@ Node 20 · TypeScript · Fastify · Prisma + Postgres (Neon) · BullMQ + Redis (
 Cloudflare R2 · face-api.js · remove.bg · Replicate (portrait) · Sharp · Next.js 14 +
 Tailwind. Full rationale in [PROJECT_PLAN.md §3](PROJECT_PLAN.md).
 
-## Getting started (fills in during Day 1 build)
+## Getting started
 
 ```bash
-# prerequisites: Node 20 (see .nvmrc), a Redis + Postgres + R2 + API keys (see .env.example)
-cp .env.example .env        # then fill in secrets
-# api
-cd apps/api && npm install && npx prisma migrate dev && npm run dev
+# prerequisites: Node 20 (see .nvmrc), a Postgres + R2 (Day 1) and Redis + API keys (Day 2+)
+cd apps/api
+cp .env.example .env        # then fill in DATABASE_URL + R2_* — see PROJECT_PLAN.md §9
+npm install
+npx prisma migrate dev --name init
+npm run dev                 # http://localhost:3001 — docs at /docs
 ```
 
 This is an **API-only** engagement. API docs (OpenAPI/Swagger UI) are served at `/docs` and
-serve as the interactive demo surface; `test/e2e.http` and `test/e2e.mjs` drive the full loop.
+serve as the interactive demo surface; `apps/api/test/e2e.http` drives the full loop.
 
 ## Status
 

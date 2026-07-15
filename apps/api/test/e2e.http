@@ -1,0 +1,44 @@
+### Day 1 end-to-end walkthrough
+### Requires the VS Code "REST Client" extension (or JetBrains HTTP Client) for
+### variable-chaining (@name / {{req.response.body.$.field}}). Otherwise run each
+### request manually, copying ids/keys from the previous response by hand.
+
+@baseUrl = http://localhost:3001
+
+### Health check
+GET {{baseUrl}}/health
+
+### 1. Create a session
+# @name createSession
+POST {{baseUrl}}/api/sessions
+Content-Type: application/json
+
+{
+  "locale": "fr",
+  "storyId": "story-1",
+  "childName": "Test Child"
+}
+
+### 2. Request a presigned upload URL
+# @name uploadUrl
+POST {{baseUrl}}/api/sessions/{{createSession.response.body.$.sessionId}}/upload-url
+Content-Type: application/json
+
+{
+  "contentType": "image/jpeg"
+}
+
+### 3. PUT the actual file to R2 — run manually (not chainable in this format), e.g.:
+# curl.exe -X PUT "<uploadUrl from step 2 response>" -H "Content-Type: image/jpeg" --data-binary "@./assets/test-photos/sample.jpg"
+
+### 4. Confirm the upload
+POST {{baseUrl}}/api/sessions/{{createSession.response.body.$.sessionId}}/upload-confirm
+Content-Type: application/json
+
+{
+  "objectKey": "{{uploadUrl.response.body.$.objectKey}}"
+}
+
+### 5. Inspect the session (convenience endpoint, not in the original API spec —
+### added for QA so pipeline state is visible without querying the DB directly)
+GET {{baseUrl}}/api/sessions/{{createSession.response.body.$.sessionId}}
