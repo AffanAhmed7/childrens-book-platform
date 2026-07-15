@@ -39,3 +39,20 @@ export async function createDownloadUrl(key: string, expiresInSeconds = 300): Pr
   const command = new GetObjectCommand({ Bucket: env.R2_BUCKET_NAME, Key: key });
   return getSignedUrl(r2, command, { expiresIn: expiresInSeconds });
 }
+
+// Server-side (non-presigned) read/write, for the pipeline worker.
+export async function putObject(key: string, body: Buffer, contentType: string): Promise<void> {
+  await r2.send(
+    new PutObjectCommand({ Bucket: env.R2_BUCKET_NAME, Key: key, Body: body, ContentType: contentType }),
+  );
+}
+
+export async function getObjectBuffer(key: string): Promise<Buffer> {
+  const result = await r2.send(new GetObjectCommand({ Bucket: env.R2_BUCKET_NAME, Key: key }));
+  const stream = result.Body as AsyncIterable<Uint8Array>;
+  const chunks: Buffer[] = [];
+  for await (const chunk of stream) {
+    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+  }
+  return Buffer.concat(chunks);
+}

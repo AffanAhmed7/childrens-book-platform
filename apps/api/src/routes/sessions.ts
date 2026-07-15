@@ -2,7 +2,10 @@ import type { FastifyInstance } from "fastify";
 import type { TypeBoxTypeProvider } from "@fastify/type-provider-typebox";
 import { Type } from "@sinclair/typebox";
 import { prisma } from "../db";
+import { env } from "../env";
 import { createUploadUrl, rawObjectKey } from "../storage";
+import { getPipelineQueue } from "../queue";
+import { subscribeStatus } from "../status-events";
 
 const ErrorResponse = Type.Object({ message: Type.String() });
 
@@ -143,7 +146,75 @@ export async function registerSessionRoutes(app: FastifyInstance) {
       });
       await prisma.session.update({ where: { id }, data: { status: "uploaded" } });
 
+      if (env.REDIS_URL) {
+        const job = await getPipelineQueue().add(
+          "process",
+          { sessionId: id, rawKey: objectKey },
+          { attempts: 1, removeOnComplete: true, removeOnFail: false },
+        );
+        await prisma.character.update({ where: { sessionId: id }, data: { jobId: job.id } });
+      } else {
+        request.log.warn("REDIS_URL not configured — skipping Day 2 pipeline enqueue.");
+      }
+
       return { ok: true as const };
+    },
+  );
+
+  api.get(
+    "/api/sessions/:id/status",
+    {
+      schema: {
+        tags: ["sessions"],
+        params: SessionParams,
+        response: { 404: ErrorResponse, 503: ErrorResponse },
+      },
+    },
+    async (request, reply) => {
+      const { id } = request.params;
+
+      const session = await prisma.session.findUnique({ where: { id } });
+      if (!session) {
+        return reply.code(404).send({ message: "Session not found" });
+      }
+      if (!env.REDIS_URL) {
+        return reply
+          .code(503)
+          .send({ message: "Live status streaming is not configured yet (REDIS_URL missing)." });
+      }
+
+      reply.hijack();
+      reply.raw.writeHead(200, {
+        "Content-Type": "text/event-stream",
+        "Cache-Control": "no-cache",
+        Connection: "keep-alive",
+      });
+
+      const send = (eventName: string, data: unknown) => {
+        reply.raw.write(`event: ${eventName}\ndata: ${JSON.stringify(data)}\n\n`);
+      };
+
+      let cleaned = false;
+      const cleanup = () => {
+        if (cleaned) return;
+        cleaned = true;
+        void unsubscribe();
+        reply.raw.end();
+      };
+
+      const unsubscribe = subscribeStatus(id, (event) => {
+        if (event.type === "status") {
+          send("status", { step: event.step, message: event.message });
+        } else if (event.type === "done") {
+          send("done", { previewUrl: event.previewUrl });
+          cleanup();
+        } else if (event.type === "error") {
+          send("error", { step: event.step, message: event.message });
+          cleanup();
+        }
+      });
+
+      request.raw.on("close", cleanup);
     },
   );
 }

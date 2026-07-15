@@ -11,6 +11,9 @@ Client: _private engagement_ · Engagement: Prototype build · Delivery window: 
 |------|----------|--------|
 | 2026-07-15 | **API-only** engagement — browser test UI **not** built this phase | `apps/web` deferred; Swagger UI at `/docs` is the interactive demo surface; a scripted `test/e2e.http` collection drives QA (§8, §10, §14) |
 | 2026-07-15 | GitHub repo: **public**, owner's account, `gh` CLI setup | See §11 |
+| 2026-07-16 | Face detection: `@tensorflow/tfjs` + `blazeface` instead of `face-api.js` | Avoids the native `canvas` package, a real build risk on Windows under this deadline; bounding boxes are sufficient for single-face validation. See `apps/api/README.md` |
+| 2026-07-16 | Portrait model: `zsxkib/instant-id-basic` on Replicate, called by name (no pinned version hash) | `REPLICATE_MODEL_VERSION` is an optional `owner/name` override, not a required hash. Style prompt is a placeholder pending client style references — expect iteration here (§13) |
+| 2026-07-16 | Pipeline job: single BullMQ job per session, `attempts: 1` (no auto-retry), not per-step retry differentiation | Per-step retry policy would need BullMQ flows (linked jobs) — more machinery than a 3-day prototype warrants; failures surface immediately via the `error` SSE event |
 
 ---
 
