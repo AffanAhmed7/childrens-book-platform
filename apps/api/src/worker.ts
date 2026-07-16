@@ -23,6 +23,10 @@ async function runStep<T>(
     return await action();
   } catch (error) {
     const message = error instanceof Error ? error.message : "Something went wrong.";
+    // A generic message like "fetch failed" hides the actual cause (ECONNRESET,
+    // ETIMEDOUT, DNS failure, etc.) — log the full error so a failure can be
+    // diagnosed from server logs alone, without needing to reproduce it.
+    console.error(`[worker] step "${step}" (slot: ${slot ?? "-"}) failed for session ${sessionId}:`, error);
     await publishStatus(sessionId, { type: "error", step, slot, message });
     await prisma.session.update({ where: { id: sessionId }, data: { status: "failed" } });
     throw error;

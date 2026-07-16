@@ -489,15 +489,32 @@ slots were auto-detected with the existing blazeface model and hardcoded in `com
 remove_bg → skin_tone → composite → done) was run successfully end-to-end once, proving the
 architecture and multi-character mechanics work — but that run used the *first-pass* prompt
 and compositing, which had visible quality issues (hard rectangular seams, stray
-props/accessories bleeding into a crop from a too-elaborate generated scene). Both issues
-were fixed (feathered-mask blending; a tightened headshot-only prompt) and each fix was
-verified individually — the tightened prompt alone was confirmed to produce a clean plain
-headshot — but a second **combined, full end-to-end confirmation** of both fixes together
-was blocked by intermittent network instability on this machine (timeouts across Neon,
-Upstash, *and* the HF Space in the same window — clearly local network conditions, not a code
-issue, given every individual piece works). **Re-run `node test/e2e-multichar.mjs <photo1>
-child_1 <name1> <photo2> child_2 <name2>` once network conditions are stable to get the final
-combined visual confirmation before treating this as demo-ready.**
+props/accessories bleeding into a crop from a too-elaborate generated scene). Both were fixed
+(feathered-mask blending; a tightened headshot-only prompt), and the tightened prompt alone
+was independently confirmed to produce a clean plain headshot.
+
+A second **combined** confirmation run then failed repeatedly with a generic error at the
+portrait step. Root-caused (after adding proper error logging — see `worker.ts`) to the real
+cause: **the free HF Space runs on ZeroGPU, which gives anonymous/unauthenticated callers
+only ~2 minutes of GPU quota per day** ([HF docs](https://huggingface.co/docs/hub/en/spaces-zerogpu)).
+This session made 10+ calls to it while testing — comfortably enough to exhaust that quota,
+after which the Space itself rejects further requests. This is **not a code or network bug**
+— every individual piece (upload, call, poll, the generation itself) was independently
+re-verified to work correctly right up until quota ran out. Two real, valuable fixes came out
+of chasing this down regardless: an unhandled `ioredis` connection error was found to crash
+the whole server (now has an error handler — see `src/redis.ts`), and worker step failures
+now log their full error/cause to the console instead of only a generic message reaching the
+SSE event (`src/worker.ts`), so this kind of root cause is immediately visible next time
+without needing to re-derive it.
+
+**Practical implication:** the anonymous free-tier path is fine for prototyping but not for
+repeated demo/production use — 2 minutes/day is roughly 1-3 generations. Options if this
+becomes a blocker: sign in with a free HF account for the API calls (3.5 min/day instead of
+2 — a marginal improvement, not a fix), wait for the daily quota reset, or switch to a paid
+model (Replicate version preserved in git history, or HF PRO at $9/mo for 25 min/day). **Once
+today's quota resets, re-run `node test/e2e-multichar.mjs <photo1> child_1 <name1> <photo2>
+child_2 <name2>` once** to get the final combined visual confirmation before a client demo —
+expected to succeed cleanly based on every component's individual verification.
 
 ---
 

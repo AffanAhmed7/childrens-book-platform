@@ -6,8 +6,8 @@ BullMQ pipeline worker, the SSE status stream, and the OpenAPI docs.
 **Status:** Day 1–3 core loop done, including a mid-build architecture pivot to
 template-based multi-character compositing (see [PROJECT_PLAN.md §17](../../PROJECT_PLAN.md)).
 Full pipeline verified end-to-end once; a second combined confirmation of the latest quality
-fixes is pending stable network conditions — see "Known state" below before treating this as
-demo-ready.
+fixes is pending the free HF Space's daily GPU quota resetting (exhausted by this session's
+testing, not a bug) — see "Known state" below before treating this as demo-ready.
 
 ## Setup
 
@@ -104,9 +104,27 @@ The full pipeline (2 characters → composite → `done`) has been run successfu
 A follow-up pass fixed two visible quality issues from that run (hard rectangular seams at
 the paste edges; stray props bleeding into a face crop from a too-busy generated scene) via
 feathered-mask compositing and a tightened portrait prompt. Each fix was verified
-individually, but a second **combined** full run to visually confirm both fixes together was
-interrupted by intermittent local network instability (timeouts across Neon, Upstash, and
-the HF Space in the same window). Re-run before a client demo:
+individually (the tightened prompt confirmed to produce a clean plain headshot on its own),
+but a second **combined** full run to visually confirm both fixes together started failing
+with a generic error at the portrait step.
+
+**Root cause, confirmed via the worker's now-improved error logging (see below):** the free
+HF Space runs on ZeroGPU, which caps *anonymous/unauthenticated* callers at **~2 minutes of
+GPU quota per day**. This session made 10+ calls to it while testing — easily enough to
+exhaust that quota, after which the Space rejects further requests with a generic error. This
+is a real, quantified limitation of the free path, **not a code or network bug** — every
+individual piece (upload, call, poll, generation) was independently re-verified working right
+up until quota ran out. Two genuinely useful fixes came out of chasing this down anyway: an
+unhandled `ioredis` connection error was crashing the whole server (now has an error handler
+— `src/redis.ts`), and worker failures now log their full error/cause to the console (not
+just a generic message) so this is immediately diagnosable next time — `src/worker.ts`.
+
+**If repeated free-tier testing/demos become a blocker:** sign in with a free HF account for
+the calls (3.5 min/day instead of 2 — marginal), wait for the daily reset, or switch to a
+paid model (Replicate version in git history, or HF PRO at $9/mo for 25 min/day).
+
+Once quota resets, re-run this once for the final combined confirmation before a client demo
+(expected to succeed cleanly given every component works individually):
 
 ```bash
 node test/e2e-multichar.mjs <photo1> child_1 <name1> <photo2> child_2 <name2>
