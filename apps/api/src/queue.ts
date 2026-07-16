@@ -5,7 +5,6 @@ export const PIPELINE_QUEUE_NAME = "pipeline";
 
 export interface PipelineJobData {
   sessionId: string;
-  rawKey: string;
 }
 
 let queueSingleton: Queue<PipelineJobData> | undefined;

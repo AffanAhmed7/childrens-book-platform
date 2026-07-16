@@ -17,9 +17,9 @@ const r2 = new S3Client({
   },
 });
 
-export function rawObjectKey(sessionId: string, contentType: string): string {
+export function rawObjectKey(sessionId: string, characterId: string, contentType: string): string {
   const extension = CONTENT_TYPE_EXTENSIONS[contentType];
-  return `sessions/${sessionId}/raw.${extension}`;
+  return `sessions/${sessionId}/characters/${characterId}/raw.${extension}`;
 }
 
 export async function createUploadUrl(

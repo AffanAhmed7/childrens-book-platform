@@ -12,11 +12,26 @@ const ErrorResponse = Type.Object({ message: Type.String() });
 const CreateSessionBody = Type.Object({
   locale: Type.Optional(Type.String({ default: "fr" })),
   storyId: Type.String({ minLength: 1 }),
-  childName: Type.String({ minLength: 1, maxLength: 100 }),
+  characters: Type.Array(
+    Type.Object({
+      slot: Type.String({ minLength: 1 }),
+      childName: Type.String({ minLength: 1, maxLength: 100 }),
+    }),
+    { minItems: 1 },
+  ),
 });
-const CreateSessionResponse = Type.Object({ sessionId: Type.String() });
+const CreateSessionResponse = Type.Object({
+  sessionId: Type.String(),
+  characters: Type.Array(
+    Type.Object({ characterId: Type.String(), slot: Type.String(), childName: Type.String() }),
+  ),
+});
 
 const SessionParams = Type.Object({ id: Type.String({ format: "uuid" }) });
+const CharacterParams = Type.Object({
+  id: Type.String({ format: "uuid" }),
+  characterId: Type.String({ format: "uuid" }),
+});
 
 const UploadUrlBody = Type.Object({
   contentType: Type.Union([
@@ -31,24 +46,25 @@ const UploadUrlResponse = Type.Object({
 });
 
 const UploadConfirmBody = Type.Object({ objectKey: Type.String({ minLength: 1 }) });
-const UploadConfirmResponse = Type.Object({ ok: Type.Literal(true) });
+const UploadConfirmResponse = Type.Object({ ok: Type.Literal(true), allUploaded: Type.Boolean() });
 
 const CharacterView = Type.Object({
   id: Type.String(),
+  slot: Type.String(),
+  childName: Type.String(),
   rawKey: Type.Union([Type.String(), Type.Null()]),
   noBgKey: Type.Union([Type.String(), Type.Null()]),
   skinToneHex: Type.Union([Type.String(), Type.Null()]),
   portraitKey: Type.Union([Type.String(), Type.Null()]),
-  previewKey: Type.Union([Type.String(), Type.Null()]),
 });
 const SessionView = Type.Object({
   id: Type.String(),
   locale: Type.String(),
   storyId: Type.String(),
-  childName: Type.String(),
   status: Type.String(),
   createdAt: Type.String(),
-  character: Type.Union([CharacterView, Type.Null()]),
+  previewKey: Type.Union([Type.String(), Type.Null()]),
+  characters: Type.Array(CharacterView),
 });
 
 export async function registerSessionRoutes(app: FastifyInstance) {
@@ -64,12 +80,24 @@ export async function registerSessionRoutes(app: FastifyInstance) {
       },
     },
     async (request, reply) => {
-      const { locale, storyId, childName } = request.body;
+      const { locale, storyId, characters } = request.body;
       const session = await prisma.session.create({
-        data: { locale: locale ?? "fr", storyId, childName },
+        data: {
+          locale: locale ?? "fr",
+          storyId,
+          characters: { create: characters.map((c) => ({ slot: c.slot, childName: c.childName })) },
+        },
+        include: { characters: true },
       });
       reply.code(201);
-      return { sessionId: session.id };
+      return {
+        sessionId: session.id,
+        characters: session.characters.map((c) => ({
+          characterId: c.id,
+          slot: c.slot,
+          childName: c.childName,
+        })),
+      };
     },
   );
 
@@ -85,7 +113,7 @@ export async function registerSessionRoutes(app: FastifyInstance) {
     async (request, reply) => {
       const session = await prisma.session.findUnique({
         where: { id: request.params.id },
-        include: { character: true },
+        include: { characters: true },
       });
       if (!session) {
         return reply.code(404).send({ message: "Session not found" });
@@ -95,25 +123,25 @@ export async function registerSessionRoutes(app: FastifyInstance) {
   );
 
   api.post(
-    "/api/sessions/:id/upload-url",
+    "/api/sessions/:id/characters/:characterId/upload-url",
     {
       schema: {
         tags: ["sessions"],
-        params: SessionParams,
+        params: CharacterParams,
         body: UploadUrlBody,
         response: { 200: UploadUrlResponse, 404: ErrorResponse },
       },
     },
     async (request, reply) => {
-      const { id } = request.params;
+      const { id, characterId } = request.params;
       const { contentType } = request.body;
 
-      const session = await prisma.session.findUnique({ where: { id } });
-      if (!session) {
-        return reply.code(404).send({ message: "Session not found" });
+      const character = await prisma.character.findFirst({ where: { id: characterId, sessionId: id } });
+      if (!character) {
+        return reply.code(404).send({ message: "Character not found" });
       }
 
-      const objectKey = rawObjectKey(id, contentType);
+      const objectKey = rawObjectKey(id, characterId, contentType);
       const uploadUrl = await createUploadUrl(objectKey, contentType, 60);
 
       return { uploadUrl, objectKey };
@@ -121,43 +149,45 @@ export async function registerSessionRoutes(app: FastifyInstance) {
   );
 
   api.post(
-    "/api/sessions/:id/upload-confirm",
+    "/api/sessions/:id/characters/:characterId/upload-confirm",
     {
       schema: {
         tags: ["sessions"],
-        params: SessionParams,
+        params: CharacterParams,
         body: UploadConfirmBody,
         response: { 200: UploadConfirmResponse, 404: ErrorResponse },
       },
     },
     async (request, reply) => {
-      const { id } = request.params;
+      const { id, characterId } = request.params;
       const { objectKey } = request.body;
 
-      const session = await prisma.session.findUnique({ where: { id } });
-      if (!session) {
-        return reply.code(404).send({ message: "Session not found" });
+      const character = await prisma.character.findFirst({ where: { id: characterId, sessionId: id } });
+      if (!character) {
+        return reply.code(404).send({ message: "Character not found" });
       }
 
-      await prisma.character.upsert({
-        where: { sessionId: id },
-        create: { sessionId: id, rawKey: objectKey },
-        update: { rawKey: objectKey },
-      });
-      await prisma.session.update({ where: { id }, data: { status: "uploaded" } });
+      await prisma.character.update({ where: { id: characterId }, data: { rawKey: objectKey } });
 
-      if (env.REDIS_URL) {
-        const job = await getPipelineQueue().add(
-          "process",
-          { sessionId: id, rawKey: objectKey },
-          { attempts: 1, removeOnComplete: true, removeOnFail: false },
-        );
-        await prisma.character.update({ where: { sessionId: id }, data: { jobId: job.id } });
-      } else {
-        request.log.warn("REDIS_URL not configured — skipping Day 2 pipeline enqueue.");
+      const remaining = await prisma.character.count({ where: { sessionId: id, rawKey: null } });
+      const allUploaded = remaining === 0;
+
+      if (allUploaded) {
+        await prisma.session.update({ where: { id }, data: { status: "uploaded" } });
+
+        if (env.REDIS_URL) {
+          const job = await getPipelineQueue().add(
+            "process",
+            { sessionId: id },
+            { attempts: 1, removeOnComplete: true, removeOnFail: false },
+          );
+          await prisma.character.updateMany({ where: { sessionId: id }, data: { jobId: job.id } });
+        } else {
+          request.log.warn("REDIS_URL not configured — skipping pipeline enqueue.");
+        }
       }
 
-      return { ok: true as const };
+      return { ok: true as const, allUploaded };
     },
   );
 
@@ -204,12 +234,12 @@ export async function registerSessionRoutes(app: FastifyInstance) {
 
       const unsubscribe = subscribeStatus(id, (event) => {
         if (event.type === "status") {
-          send("status", { step: event.step, message: event.message });
+          send("status", { step: event.step, slot: event.slot, message: event.message });
         } else if (event.type === "done") {
           send("done", { previewUrl: event.previewUrl });
           cleanup();
         } else if (event.type === "error") {
-          send("error", { step: event.step, message: event.message });
+          send("error", { step: event.step, slot: event.slot, message: event.message });
           cleanup();
         }
       });

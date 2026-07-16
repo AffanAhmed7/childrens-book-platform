@@ -8,24 +8,26 @@ datasource db {
 }
 
 model Session {
-  id        String     @id @default(uuid())
-  locale    String     @default("fr")
-  storyId   String
-  childName String
-  status    String     @default("created") // created | uploaded | validated | processing | done | failed
-  createdAt DateTime   @default(now())
-  character Character?
+  id         String      @id @default(uuid())
+  locale     String      @default("fr")
+  storyId    String
+  status     String      @default("created") // created | uploaded | processing | done | failed
+  createdAt  DateTime    @default(now())
+  previewKey String? // final composited page — one per session, all characters combined
+  characters Character[]
 }
 
 model Character {
   id          String  @id @default(uuid())
-  sessionId   String  @unique
+  sessionId   String
   session     Session @relation(fields: [sessionId], references: [id])
-  role        String  @default("child")
+  slot        String // matches a face region in the session's template, e.g. "child_1"
+  childName   String
   rawKey      String? // R2 key, original upload
-  noBgKey     String? // after remove.bg
-  skinToneHex String? // sampled skin tone
-  portraitKey String? // illustrated asset, transparent bg
-  previewKey  String? // final composited preview
+  noBgKey     String? // no-bg version of the *stylized portrait* (not the raw upload)
+  skinToneHex String? // sampled from the raw upload's face region
+  portraitKey String? // illustrated portrait, from the raw upload
   jobId       String? // BullMQ job id for status lookup
+
+  @@unique([sessionId, slot])
 }

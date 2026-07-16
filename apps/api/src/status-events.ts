@@ -3,9 +3,9 @@ import { createRedisConnection } from "./redis";
 import type { PipelineStep } from "./pipeline/types";
 
 export type StatusEvent =
-  | { type: "status"; step: PipelineStep; message: string }
+  | { type: "status"; step: PipelineStep; slot?: string; message: string }
   | { type: "done"; previewUrl: string }
-  | { type: "error"; step: PipelineStep; message: string };
+  | { type: "error"; step: PipelineStep; slot?: string; message: string };
 
 function channelFor(sessionId: string): string {
   return `session:${sessionId}`;

@@ -20,14 +20,21 @@ const SPACE_BASE_URL = "https://instantx-instantid.hf.space";
 const longPollAgent = new Agent({ headersTimeout: 15 * 60 * 1000, bodyTimeout: 15 * 60 * 1000 });
 const STYLE_TEMPLATE = "Watercolor"; // one of the space's built-in style presets
 
+// Constrained to a plain headshot (face + shoulders, looking at camera, no
+// props) because the output gets face-detected and cropped for compositing
+// (see composite.ts) — a busier scene (props, instruments, turned pose) pulls
+// stray content into that crop.
 const STYLE_PROMPT =
-  "children's storybook illustration, warm watercolor style, cute cartoon character portrait, soft colors, friendly smile";
-// The space's own tuned negative prompt (from its default UI value) — reused
-// as-is since it's already calibrated for this specific model.
+  "children's storybook illustration, warm watercolor style, simple clean headshot portrait, " +
+  "face and shoulders only, looking directly at camera, plain neutral background, soft colors, " +
+  "friendly smile, no props, no accessories, no objects in hands";
+// The space's own tuned negative prompt (from its default UI value), extended
+// with terms that keep the output to a plain headshot.
 const NEGATIVE_PROMPT =
   "(lowres, low quality, worst quality:1.2), (text:1.2), watermark, (frame:1.2), deformed, ugly, " +
   "deformed eyes, blur, out of focus, blurry, deformed cat, deformed, photo, anthropomorphic cat, " +
-  "monochrome, pet collar, gun, weapon, blue, 3d, drones, drone, buildings in background, green";
+  "monochrome, pet collar, gun, weapon, blue, 3d, drones, drone, buildings in background, green, " +
+  "sunglasses, microphone, instruments, props, accessories, objects in hand, full body, wide shot, turned pose";
 
 interface GradioFileData {
   path: string;

@@ -14,6 +14,7 @@ Client: _private engagement_ · Engagement: Prototype build · Delivery window: 
 | 2026-07-16 | Face detection: `@tensorflow/tfjs` + `blazeface` instead of `face-api.js` | Avoids the native `canvas` package, a real build risk on Windows under this deadline; bounding boxes are sufficient for single-face validation. See `apps/api/README.md` |
 | 2026-07-16 | Portrait model: free public Hugging Face Space (`InstantX/InstantID`), not Replicate | No card/budget available. Verified end-to-end with a real photo — good watercolor-style, identity-preserving results. Trade-off: shared free GPU queue (latency ranges seconds-to-minutes), community-maintained. Replicate version preserved in git history if a paid, more reliable path is wanted later. See `apps/api/README.md` |
 | 2026-07-16 | Pipeline job: single BullMQ job per session, `attempts: 1` (no auto-retry), not per-step retry differentiation | Per-step retry policy would need BullMQ flows (linked jobs) — more machinery than a 3-day prototype warrants; failures surface immediately via the `error` SSE event |
+| 2026-07-16 | **Scope pivot: multi-character + template-based compositing**, superseding the single-character "generate one preview" design | Client wants a small-scale proof of Imagitime's actual architecture (one stylized portrait per child, reused via fast compositing — not regenerated per page) plus **true multi-character** now, not deferred. New Session→many Character data model, per-character upload endpoints, and a new `composite` pipeline step. Full detail in the approved plan; see §17 below and `apps/api/README.md` |
 
 ---
 
@@ -432,13 +433,71 @@ timeline:
 
 ## 16. Explicitly Deferred to Later Phases
 
-Multi-character compositing · multi-page preview · Stripe cart/checkout · 300 DPI CMYK print
-PDF + Gelato/Lulu integration · admin dashboard · GDPR deletion cron + audit log ·
+~~Multi-character compositing~~ — **pulled forward into scope, see §17** (2026-07-16).
+Multi-page preview (the full 24-page/14-theme library) · Stripe cart/checkout · 300 DPI CMYK
+print PDF + Gelato/Lulu integration · admin dashboard · GDPR deletion cron + audit log ·
 auth/accounts · Resend transactional email · full next-intl i18n rollout beyond the single
 test locale.
 
 These are captured here so scope is transparent and nothing reads as "missing" — each is a
 named Phase-2+ item, not an omission.
+
+---
+
+## 17. Multi-Character Pivot (2026-07-16)
+
+Mid-build, the client sent reference material (screenshots of the Imagitime competitor app —
+see decision log) revealing the real target architecture, and asked for two changes to the
+originally-scoped single-character/"generate one preview" prototype:
+
+1. **Don't regenerate a new image per page.** Imagitime's own claims (2-minute preview,
+   24+ pages) only make sense if the expensive step — turning a real photo into an
+   illustrated likeness — runs **once per child**, and each page is a fast compositing
+   operation reusing pre-made artwork, not a full diffusion regeneration per page.
+2. **True multi-character, now** — 2+ different real children combined in one scene,
+   confirmed as a hard requirement (not deferred), even though Imagitime's own product only
+   shows one recurring child across many page themes.
+
+Confirmed with the client: no real template art exists yet (the client's screenshots weren't
+usable artwork), so a placeholder template is being used, swappable later with no code
+changes; today's target is proving the architecture at small scale (one template, two
+character slots), not the full 24-page/14-theme library.
+
+**Architecture:** Step A (per child, already-built `portrait` step) generates one stylized
+reference portrait via the free HF Space. Step B (new `composite` step) crops that portrait's
+face and blends it — via a soft feathered mask, not a hard-edged paste — onto a fixed
+template's face slot using Sharp. No AI call for Step B, so adding pages later is cheap and
+fast. Full reasoning (including why a literal ML face-swap tool wasn't used) is in the
+approved plan and `apps/api/README.md`.
+
+**Data model:** `Session` now has many `Character` (was 1:1); each `Character` has a `slot`
+(matches a template face region) and its own `childName`. `Session.previewKey` holds the
+final composited page.
+
+**API:** `POST /api/sessions` now takes a `characters[]` array; upload endpoints move to
+`/api/sessions/:id/characters/:characterId/upload-url|upload-confirm`; the pipeline enqueues
+only once every character in the session has uploaded; SSE `status`/`error` events carry a
+`slot` field.
+
+**Template:** `assets/templates/two-children-park.png`, generated via the free
+`black-forest-labs/FLUX.1-schnell` Hugging Face Space (no artist available yet). Its two face
+slots were auto-detected with the existing blazeface model and hardcoded in `composite.ts`
+(both faces were only found by detecting each half of the image separately — see
+`apps/api/README.md` for why).
+
+**Verification status:** the full pipeline (both characters through validate → portrait →
+remove_bg → skin_tone → composite → done) was run successfully end-to-end once, proving the
+architecture and multi-character mechanics work — but that run used the *first-pass* prompt
+and compositing, which had visible quality issues (hard rectangular seams, stray
+props/accessories bleeding into a crop from a too-elaborate generated scene). Both issues
+were fixed (feathered-mask blending; a tightened headshot-only prompt) and each fix was
+verified individually — the tightened prompt alone was confirmed to produce a clean plain
+headshot — but a second **combined, full end-to-end confirmation** of both fixes together
+was blocked by intermittent network instability on this machine (timeouts across Neon,
+Upstash, *and* the HF Space in the same window — clearly local network conditions, not a code
+issue, given every individual piece works). **Re-run `node test/e2e-multichar.mjs <photo1>
+child_1 <name1> <photo2> child_2 <name2>` once network conditions are stable to get the final
+combined visual confirmation before treating this as demo-ready.**
 
 ---
 
