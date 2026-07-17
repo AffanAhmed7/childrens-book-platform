@@ -26,6 +26,14 @@ interface ReplicatePrediction {
   status: "starting" | "processing" | "succeeded" | "failed" | "canceled";
   output?: string | string[];
   error?: string | null;
+  // The model's own stdout. Absent unless something went wrong internally —
+  // it can report `status: "succeeded"` with no output when its internal face
+  // detector (separate from our blazeface check) fails to find a face in
+  // either input, which shows up here as "No face found" rather than as
+  // `error` or a non-"succeeded" status. Measured on a real photo with an
+  // unusually tight/edge-to-edge crop, and separately on illustrated crops
+  // whose art style the detector didn't recognize as a face at all.
+  logs?: string | null;
   urls: { get: string; cancel?: string };
 }
 
@@ -92,7 +100,12 @@ export async function swapFace(targetImage: Buffer, swapImageUri: string): Promi
     prediction = await pollUntilDone(prediction.urls.get);
   }
   if (prediction.status !== "succeeded" || !prediction.output) {
-    throw new FaceSwapError(prediction.error ?? `Face swap ${prediction.status}.`);
+    console.error(`[faceSwap] prediction ${prediction.id} produced no output (status: ${prediction.status}). Model logs: ${prediction.logs ?? "(none)"}`);
+    const noFaceFound = prediction.logs?.includes("No face found") ?? false;
+    const message = noFaceFound
+      ? "Couldn't find a usable face in the photo or the artwork for this page."
+      : (prediction.error ?? `Face swap did not produce an image (status: ${prediction.status}).`);
+    throw new FaceSwapError(message);
   }
 
   const outputUrl = Array.isArray(prediction.output) ? prediction.output[0] : prediction.output;

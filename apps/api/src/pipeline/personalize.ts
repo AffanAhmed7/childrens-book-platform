@@ -19,19 +19,71 @@ export interface CharacterInput {
   hairToneHex?: string | null;
 }
 
+// Treats two boxes as the same detected face if their centres are close
+// relative to their size — more forgiving than IoU when two passes crop the
+// same face slightly differently (e.g. whole-image vs. a half-image pass).
+function sameFace(a: FaceBox, b: FaceBox): boolean {
+  const ax = a.left + a.width / 2;
+  const ay = a.top + a.height / 2;
+  const bx = b.left + b.width / 2;
+  const by = b.top + b.height / 2;
+  const scale = Math.min(a.width, a.height, b.width, b.height);
+  return Math.hypot(ax - bx, ay - by) < scale * 0.6;
+}
+
 /**
  * Finds the drawn characters on a page, left to right.
  *
  * Ordering by x is the whole mapping convention for multi-character pages: the
  * leftmost drawn character is the page's first slot. A page can override this
  * with an explicit `slots` list when the drawn order isn't left-to-right.
+ *
+ * A single whole-page pass is enough for a solo-character page, but blazeface
+ * (a small, mobile-oriented model) was measured to miss one of two children
+ * standing side by side in the same wide frame — it only reliably finds both
+ * when detected in a narrower crop. It's also sensitive to the *exact* crop
+ * width in a way that isn't systematic (a 65%-width crop missed a face that
+ * 60%, 62% and 70% all caught) — so rather than pick one "safe" ratio, this
+ * runs several overlapping windows and merges whatever any of them find,
+ * deduping faces caught by more than one window. All passes are local CPU
+ * work (no API cost).
  */
 async function detectPageCharacters(pageBuffer: Buffer): Promise<FaceBox[]> {
-  const { faces } = await detectFaces(pageBuffer);
-  return faces
-    .filter((f) => f.score >= FACE_CONFIDENCE_THRESHOLD)
-    .sort((a, b) => a.box.left - b.box.left)
-    .map((f) => f.box);
+  const meta = await sharp(pageBuffer).metadata();
+  const width = meta.width ?? 0;
+  const height = meta.height ?? 0;
+
+  const windows = [
+    { left: 0, width },
+    { left: 0, width: Math.round(width * 0.6) },
+    { left: Math.round(width * 0.2), width: Math.round(width * 0.6) },
+    { left: Math.round(width * 0.4), width: width - Math.round(width * 0.4) },
+  ];
+
+  const results = await Promise.all(
+    windows.map(async (w) => {
+      const cropWidth = Math.min(w.width, width - w.left);
+      const buffer =
+        w.left === 0 && cropWidth === width
+          ? pageBuffer
+          : await sharp(pageBuffer).extract({ left: w.left, top: 0, width: cropWidth, height }).png().toBuffer();
+      const { faces } = await detectFaces(buffer);
+      return faces.map((f) => ({ box: { ...f.box, left: f.box.left + w.left }, score: f.score }));
+    }),
+  );
+
+  const candidates = results
+    .flat()
+    .filter((c) => c.score >= FACE_CONFIDENCE_THRESHOLD)
+    .sort((a, b) => b.score - a.score);
+
+  const merged: FaceBox[] = [];
+  for (const candidate of candidates) {
+    if (merged.some((box) => sameFace(box, candidate.box))) continue;
+    merged.push(candidate.box);
+  }
+
+  return merged.sort((a, b) => a.left - b.left);
 }
 
 // The swap model has no face-index input — it swaps whatever face it finds. So

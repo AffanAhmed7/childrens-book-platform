@@ -84,6 +84,15 @@ export const BOOKS: Record<string, BookConfig> = {
       { id: "astronaut", imagePath: path.join(ASSETS, "temp_1.jpeg"), caption: "Floating among the planets" },
       { id: "pilot", imagePath: path.join(ASSETS, "temp_2.jpeg"), caption: "Taking to the skies" },
       { id: "architect", imagePath: path.join(ASSETS, "temp_3.jpeg"), caption: "Building the city" },
+      // NOT wired in: assets/templates/two-children-park.png (2 drawn characters,
+      // girl left/boy right — our own blazeface detection finds both faces
+      // fine). But the swap MODEL's own internal face detector fails on this
+      // art for both characters regardless of photo (Replicate logs: "No face
+      // found" / "'NoneType' object has no attribute 'kps'"), confirmed
+      // against a photo that swaps fine elsewhere. Needs different multi
+      // -character artwork (or a preprocessing tweak yet to be found) before
+      // it can be a real page — adding it to this book as-is would silently
+      // fail every preview/full render.
     ],
   },
 };
