@@ -20,9 +20,27 @@ async function getModel(): Promise<blazeface.BlazeFaceModel> {
   return modelPromise;
 }
 
+export interface Point {
+  x: number;
+  y: number;
+}
+
+// blazeface's fixed landmark order: right eye, left eye, nose tip, mouth, right
+// ear, left ear — "right"/"left" are the subject's own left/right, i.e. mirrored
+// in image space (subject's right eye appears on the left side of the frame).
+export interface FaceLandmarks {
+  rightEye: Point;
+  leftEye: Point;
+  noseTip: Point;
+  mouth: Point;
+  rightEar: Point;
+  leftEar: Point;
+}
+
 export interface DetectedFace {
   score: number;
   box: FaceBox;
+  landmarks: FaceLandmarks | undefined;
 }
 
 export interface DetectFacesResult {
@@ -57,6 +75,20 @@ export async function detectFaces(imageBuffer: Buffer): Promise<DetectFacesResul
         ? prediction.probability[0]
         : (prediction.probability as unknown as number);
 
+      const rawLandmarks = prediction.landmarks as number[][] | undefined;
+      let landmarks: FaceLandmarks | undefined;
+      if (Array.isArray(rawLandmarks) && rawLandmarks.length >= 6) {
+        const toPoint = (pair: number[] | undefined): Point => ({ x: pair?.[0] ?? 0, y: pair?.[1] ?? 0 });
+        landmarks = {
+          rightEye: toPoint(rawLandmarks[0]),
+          leftEye: toPoint(rawLandmarks[1]),
+          noseTip: toPoint(rawLandmarks[2]),
+          mouth: toPoint(rawLandmarks[3]),
+          rightEar: toPoint(rawLandmarks[4]),
+          leftEar: toPoint(rawLandmarks[5]),
+        };
+      }
+
       faces.push({
         score: rawScore ?? 0,
         box: {
@@ -65,6 +97,7 @@ export async function detectFaces(imageBuffer: Buffer): Promise<DetectFacesResul
           width: Math.max(1, Math.round(brx - tlx)),
           height: Math.max(1, Math.round(bry - tly)),
         },
+        landmarks,
       });
     }
 

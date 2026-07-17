@@ -1,23 +1,26 @@
-// Day 2 end-to-end check: create a session, upload a real photo, then watch the
-// live SSE status stream through validate -> remove_bg -> skin_tone -> portrait.
+// End-to-end check for the face-swap pipeline (book "demo-book"). Creates a session, uploads one real photo,
+// and watches the SSE stream through validate -> skin_tone -> swap (one face
+// swap per book page, run in parallel).
 //
-// Usage: node test/e2e-day2.mjs ./path/to/photo.jpg
+// Usage: node test/e2e-single.mjs <photo.jpg> [childName]
 // Requires the API server running (npm run dev) with REDIS_URL, R2 and
-// remove.bg configured in apps/api/.env. Portrait generation runs on a free
-// Hugging Face Space with variable latency (seconds to several minutes) — this
-// script uses a long-timeout dispatcher so it doesn't give up early.
+// REPLICATE_API_TOKEN configured. Swaps run on CPU in seconds once warm (first
+// call may take ~60s on a cold Replicate boot).
 
 import { readFile } from "node:fs/promises";
 import { Agent, fetch as undiciFetch } from "undici";
 
 const baseUrl = process.env.API_BASE_URL ?? "http://localhost:3001";
-const photoPath = process.argv[2];
 const longPollAgent = new Agent({ headersTimeout: 15 * 60 * 1000, bodyTimeout: 15 * 60 * 1000 });
 
+const [photoPath, childName = "Test Child"] = process.argv.slice(2);
 if (!photoPath) {
-  console.error("Usage: node test/e2e-day2.mjs <path-to-photo.jpg>");
+  console.error("Usage: node test/e2e-single.mjs <photo.jpg> [childName]");
   process.exit(1);
 }
+
+const STORY_ID = "demo-book";
+const SLOT = "child_1";
 
 async function listenToStatus(sessionId) {
   const response = await undiciFetch(`${baseUrl}/api/sessions/${sessionId}/status`, {
@@ -47,7 +50,7 @@ async function listenToStatus(sessionId) {
       const data = dataLine ? JSON.parse(dataLine.slice("data:".length).trim()) : undefined;
       console.log(`[${event}]`, data);
       if (event === "done" || event === "error") {
-        return;
+        return data;
       }
       frameEnd = buffer.indexOf("\n\n");
     }
@@ -58,16 +61,23 @@ async function main() {
   const createResponse = await fetch(`${baseUrl}/api/sessions`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ storyId: "story-1", childName: "Test Child" }),
+    body: JSON.stringify({
+      storyId: STORY_ID,
+      characters: [{ slot: SLOT, childName }],
+    }),
   });
-  const { sessionId } = await createResponse.json();
+  const { sessionId, characters } = await createResponse.json();
   console.log(`Session created: ${sessionId}`);
+  const character = characters.find((c) => c.slot === SLOT);
 
-  const uploadUrlResponse = await fetch(`${baseUrl}/api/sessions/${sessionId}/upload-url`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ contentType: "image/jpeg" }),
-  });
+  const uploadUrlResponse = await fetch(
+    `${baseUrl}/api/sessions/${sessionId}/characters/${character.characterId}/upload-url`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ contentType: "image/jpeg" }),
+    },
+  );
   const { uploadUrl, objectKey } = await uploadUrlResponse.json();
 
   const fileBuffer = await readFile(photoPath);
@@ -79,19 +89,23 @@ async function main() {
   if (!putResponse.ok) {
     throw new Error(`Upload to R2 failed: ${putResponse.status}`);
   }
-  console.log(`Uploaded photo -> ${objectKey}`);
+  console.log(`Uploaded ${photoPath} -> ${objectKey}`);
 
   // Start listening before confirming, so we don't miss the first status event.
   const statusPromise = listenToStatus(sessionId);
 
-  await fetch(`${baseUrl}/api/sessions/${sessionId}/upload-confirm`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ objectKey }),
-  });
-  console.log("Upload confirmed — pipeline job enqueued.");
+  const confirm = await fetch(
+    `${baseUrl}/api/sessions/${sessionId}/characters/${character.characterId}/upload-confirm`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ objectKey }),
+    },
+  ).then((r) => r.json());
+  console.log("Upload confirmed:", confirm);
 
-  await statusPromise;
+  const finalEvent = await statusPromise;
+  console.log("Final event:", finalEvent);
 }
 
 main().catch((error) => {

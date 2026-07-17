@@ -1,4 +1,4 @@
-export type PipelineStep = "validate" | "remove_bg" | "skin_tone" | "portrait" | "composite";
+export type PipelineStep = "validate" | "skin_tone" | "swap";
 
 export interface FaceBox {
   left: number;

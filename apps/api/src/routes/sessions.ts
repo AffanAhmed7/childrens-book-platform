@@ -3,9 +3,10 @@ import type { TypeBoxTypeProvider } from "@fastify/type-provider-typebox";
 import { Type } from "@sinclair/typebox";
 import { prisma } from "../db";
 import { env } from "../env";
-import { createUploadUrl, rawObjectKey } from "../storage";
+import { createUploadUrl, createDownloadUrl, rawObjectKey, objectExists } from "../storage";
 import { getPipelineQueue } from "../queue";
 import { subscribeStatus } from "../status-events";
+import { getBook, pageObjectKey } from "../pipeline/templates";
 
 const ErrorResponse = Type.Object({ message: Type.String() });
 
@@ -57,6 +58,25 @@ const CharacterView = Type.Object({
   skinToneHex: Type.Union([Type.String(), Type.Null()]),
   portraitKey: Type.Union([Type.String(), Type.Null()]),
 });
+const RenderFullResponse = Type.Object({
+  ok: Type.Literal(true),
+  jobId: Type.Union([Type.String(), Type.Null()]),
+});
+
+const PageView = Type.Object({
+  id: Type.String(),
+  caption: Type.Union([Type.String(), Type.Null()]),
+  preview: Type.Boolean(),
+  ready: Type.Boolean(),
+  url: Type.Union([Type.String(), Type.Null()]),
+});
+const PagesResponse = Type.Object({
+  sessionId: Type.String(),
+  storyId: Type.String(),
+  title: Type.String(),
+  pages: Type.Array(PageView),
+});
+
 const SessionView = Type.Object({
   id: Type.String(),
   locale: Type.String(),
@@ -176,9 +196,11 @@ export async function registerSessionRoutes(app: FastifyInstance) {
         await prisma.session.update({ where: { id }, data: { status: "uploaded" } });
 
         if (env.REDIS_URL) {
+          // Only the preview pages are rendered up front — the rest of the book
+          // is rendered by POST /render-full once it's bought.
           const job = await getPipelineQueue().add(
             "process",
-            { sessionId: id },
+            { sessionId: id, mode: "preview" },
             { attempts: 1, removeOnComplete: true, removeOnFail: false },
           );
           await prisma.character.updateMany({ where: { sessionId: id }, data: { jobId: job.id } });
@@ -188,6 +210,83 @@ export async function registerSessionRoutes(app: FastifyInstance) {
       }
 
       return { ok: true as const, allUploaded };
+    },
+  );
+
+  api.post(
+    "/api/sessions/:id/render-full",
+    {
+      schema: {
+        tags: ["sessions"],
+        params: SessionParams,
+        response: { 202: RenderFullResponse, 404: ErrorResponse, 409: ErrorResponse, 503: ErrorResponse },
+      },
+    },
+    async (request, reply) => {
+      const { id } = request.params;
+      const session = await prisma.session.findUnique({ where: { id }, include: { characters: true } });
+      if (!session) {
+        return reply.code(404).send({ message: "Session not found" });
+      }
+      if (session.characters.some((c) => !c.rawKey)) {
+        return reply.code(409).send({ message: "Every character needs an uploaded photo first." });
+      }
+      if (!env.REDIS_URL) {
+        return reply.code(503).send({ message: "Rendering is not configured yet (REDIS_URL missing)." });
+      }
+
+      // Pages already rendered for the preview are reused, not re-paid for —
+      // the worker skips any page that already exists in storage.
+      const job = await getPipelineQueue().add(
+        "process",
+        { sessionId: id, mode: "full" },
+        { attempts: 1, removeOnComplete: true, removeOnFail: false },
+      );
+      reply.code(202);
+      return { ok: true as const, jobId: job.id ?? null };
+    },
+  );
+
+  api.get(
+    "/api/sessions/:id/pages",
+    {
+      schema: {
+        tags: ["sessions"],
+        params: SessionParams,
+        response: { 200: PagesResponse, 404: ErrorResponse },
+      },
+    },
+    async (request, reply) => {
+      const { id } = request.params;
+      const session = await prisma.session.findUnique({ where: { id } });
+      if (!session) {
+        return reply.code(404).send({ message: "Session not found" });
+      }
+
+      let book;
+      try {
+        book = getBook(session.storyId);
+      } catch {
+        return reply.code(404).send({ message: `No book configured for "${session.storyId}".` });
+      }
+
+      // Pages live at a predictable key, so what's ready is derived from storage
+      // rather than tracked separately in the database.
+      const pages = await Promise.all(
+        book.pages.map(async (page) => {
+          const key = pageObjectKey(id, page.id);
+          const ready = await objectExists(key);
+          return {
+            id: page.id,
+            caption: page.caption ?? null,
+            preview: page.preview ?? false,
+            ready,
+            url: ready ? await createDownloadUrl(key, 3600) : null,
+          };
+        }),
+      );
+
+      return { sessionId: id, storyId: session.storyId, title: book.title, pages };
     },
   );
 

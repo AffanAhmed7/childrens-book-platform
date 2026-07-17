@@ -1,4 +1,4 @@
-import { S3Client, PutObjectCommand, GetObjectCommand } from "@aws-sdk/client-s3";
+import { S3Client, PutObjectCommand, GetObjectCommand, HeadObjectCommand } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import { env } from "./env";
 
@@ -45,6 +45,21 @@ export async function putObject(key: string, body: Buffer, contentType: string):
   await r2.send(
     new PutObjectCommand({ Bucket: env.R2_BUCKET_NAME, Key: key, Body: body, ContentType: contentType }),
   );
+}
+
+// Used to skip work that's already done: a retried job (or a re-run of the same
+// session) shouldn't pay for face swaps that already produced a page.
+export async function objectExists(key: string): Promise<boolean> {
+  try {
+    await r2.send(new HeadObjectCommand({ Bucket: env.R2_BUCKET_NAME, Key: key }));
+    return true;
+  } catch (error) {
+    const status = (error as { $metadata?: { httpStatusCode?: number } })?.$metadata?.httpStatusCode;
+    if (status === 404 || (error as { name?: string })?.name === "NotFound") {
+      return false;
+    }
+    throw error;
+  }
 }
 
 export async function getObjectBuffer(key: string): Promise<Buffer> {
