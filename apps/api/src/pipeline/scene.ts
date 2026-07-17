@@ -1,4 +1,6 @@
-import { readFile } from "node:fs/promises";
+import { createHash } from "node:crypto";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
+import path from "node:path";
 import sharp from "sharp";
 import { detectFaces } from "./faceDetect";
 import { runReplicate, fetchToBuffer } from "./replicate";
@@ -16,12 +18,48 @@ const CODEFORMER_VERSION = "cc4956dd26fa5a7185d5660cc9100fab1b8070a1d1654a8bb5eb
 
 const dataUri = (buf: Buffer, ext = "png") => `data:image/${ext};base64,${buf.toString("base64")}`;
 
-/** Stage 1 — repaint the whole scene as this child (google/nano-banana). */
-export async function repaintScene(templateBuf: Buffer, photoUri: string): Promise<Buffer> {
-  const url = await runReplicate("models/google/nano-banana/predictions", {
-    input: { prompt: REPAINT_PROMPT, image_input: [dataUri(templateBuf), photoUri], output_format: "png" },
-  });
-  return fetchToBuffer(url);
+// Repaint is the pipeline's expensive, slow call (~$0.039, 90-170s — google/nano
+// -banana billed per-image regardless of how many times the same template+photo
+// pair is repainted). Dev/demo runs (npm run personalize) re-test the same photo
+// against the same template repeatedly while tuning swap/restore/heal, so cache
+// the repaint output on disk keyed by exactly what determines it: the cropped
+// template bytes, the prompt, and the photo. Not used by the production per-page
+// pipeline (personalize.ts), which never calls repaintScene.
+const REPAINT_CACHE_DIR = path.resolve(process.cwd(), ".cache/repaint");
+
+// nano-banana-2-lite is a cost/latency comparison candidate (~$0.0336/image,
+// ~4s vs. nano-banana's ~$0.039/90-170s) — unverified on our painterly
+// templates, so it's opt-in, not the default. See docs/DEMO_PLAN.md.
+export type RepaintModel = "nano-banana" | "nano-banana-2-lite";
+
+function repaintCacheKey(templateBuf: Buffer, photoUri: string, model: RepaintModel): string {
+  return createHash("sha256").update(model).update(REPAINT_PROMPT).update(templateBuf).update(photoUri).digest("hex");
+}
+
+/** Stage 1 — repaint the whole scene as this child (google/nano-banana by default). */
+export async function repaintScene(templateBuf: Buffer, photoUri: string, model: RepaintModel = "nano-banana"): Promise<Buffer> {
+  const cacheFile = path.join(REPAINT_CACHE_DIR, `${repaintCacheKey(templateBuf, photoUri, model)}.png`);
+  try {
+    const cached = await readFile(cacheFile);
+    console.error(`[repaint] cache hit (${model}), skipping repaint call -> ${cacheFile}`);
+    return cached;
+  } catch {
+    // Cache miss — fall through to the real call.
+  }
+
+  const url =
+    model === "nano-banana-2-lite"
+      ? await runReplicate("models/google/nano-banana-2-lite/predictions", {
+          input: { prompt: REPAINT_PROMPT, images: [dataUri(templateBuf), photoUri], match_input_image: true, output_format: "png" },
+        })
+      : await runReplicate("models/google/nano-banana/predictions", {
+          input: { prompt: REPAINT_PROMPT, image_input: [dataUri(templateBuf), photoUri], output_format: "png" },
+        });
+  const result = await fetchToBuffer(url);
+
+  await mkdir(REPAINT_CACHE_DIR, { recursive: true });
+  await writeFile(cacheFile, result);
+  return result;
 }
 
 /** Stage 2 — sharpen identity to exactly this child (codeplugtech/face-swap). */
@@ -230,6 +268,7 @@ export interface PersonalizeSceneOptions {
   swap?: boolean; // default true
   restore?: boolean; // default true (only runs when swap ran)
   heal?: boolean; // default true (only runs when swap ran)
+  repaintModel?: RepaintModel; // default "nano-banana"
   // Called after each stage with a copy of the intermediate — lets a CLI save
   // debug frames without the engine knowing about the filesystem.
   onStage?: (stage: "repaint" | "swap" | "restore" | "heal", image: Buffer) => void | Promise<void>;
@@ -248,13 +287,13 @@ export async function personalizeScene(
   photoExt: "png" | "jpeg",
   opts: PersonalizeSceneOptions = {},
 ): Promise<Buffer> {
-  const { swap = true, restore = true, heal = true, onStage } = opts;
+  const { swap = true, restore = true, heal = true, repaintModel = "nano-banana", onStage } = opts;
 
   let templateBuf: Buffer = await readFile(scene.imagePath);
   if (scene.crop) templateBuf = await sharp(templateBuf).extract(scene.crop as FaceBox).png().toBuffer();
   const photoUri = dataUri(photoBuf, photoExt);
 
-  let result = await repaintScene(templateBuf, photoUri);
+  let result = await repaintScene(templateBuf, photoUri, repaintModel);
   await onStage?.("repaint", result);
 
   if (swap) {
