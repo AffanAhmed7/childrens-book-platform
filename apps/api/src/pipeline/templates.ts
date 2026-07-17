@@ -89,10 +89,16 @@ export const BOOKS: Record<string, BookConfig> = {
       // fine). But the swap MODEL's own internal face detector fails on this
       // art for both characters regardless of photo (Replicate logs: "No face
       // found" / "'NoneType' object has no attribute 'kps'"), confirmed
-      // against a photo that swaps fine elsewhere. Needs different multi
-      // -character artwork (or a preprocessing tweak yet to be found) before
-      // it can be a real page — adding it to this book as-is would silently
-      // fail every preview/full render.
+      // against a photo that swaps fine elsewhere. Root cause was the flat
+      // vector/cartoon style (thick outlines, flat fills) — see
+      // two-children-park-v2.png below, generated in the same soft-shaded
+      // painterly style as `workshop`, which the model DOES accept.
+      {
+        id: "park",
+        imagePath: path.join(ASSETS, "two-children-park-v2.png"),
+        caption: "A day in the park",
+        preview: true,
+      },
     ],
   },
 };
