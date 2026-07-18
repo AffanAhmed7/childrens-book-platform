@@ -54,9 +54,7 @@ const CharacterView = Type.Object({
   slot: Type.String(),
   childName: Type.String(),
   rawKey: Type.Union([Type.String(), Type.Null()]),
-  noBgKey: Type.Union([Type.String(), Type.Null()]),
   skinToneHex: Type.Union([Type.String(), Type.Null()]),
-  portraitKey: Type.Union([Type.String(), Type.Null()]),
 });
 const RenderFullResponse = Type.Object({
   ok: Type.Literal(true),

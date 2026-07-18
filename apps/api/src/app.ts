@@ -16,7 +16,8 @@ export async function buildApp() {
       info: {
         title: "Children's Book Platform — Prototype API",
         description:
-          "Photo-to-illustration pipeline: upload, validate, generate portrait, composite preview.",
+          "Multi-character storybook pipeline: upload a child's photo, validate it, then face-swap " +
+          "the child onto their drawn character in the illustrator's finished page artwork.",
         version: "0.1.0",
       },
     },

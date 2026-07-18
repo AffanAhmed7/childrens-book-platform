@@ -3,11 +3,10 @@
 TypeScript + Fastify service that owns multi-character sessions, presigned R2 uploads, the
 BullMQ pipeline worker, the SSE status stream, and the OpenAPI docs.
 
-**Status:** Day 1–3 core loop done, including a mid-build architecture pivot to
-template-based multi-character compositing (see [PROJECT_PLAN.md §17](../../PROJECT_PLAN.md)).
-Full pipeline verified end-to-end once; a second combined confirmation of the latest quality
-fixes is pending the free HF Space's daily GPU quota resetting (exhausted by this session's
-testing, not a bug) — see "Known state" below before treating this as demo-ready.
+**Status:** face-swap architecture (see [PROJECT_PLAN.md §17](../../PROJECT_PLAN.md) for the
+pivot history from the original generate-then-composite design). Multi-character face-swap has
+been run successfully end-to-end through the real API — see "Known state" below for exactly
+what's verified and what isn't yet.
 
 ## Setup
 
@@ -15,13 +14,13 @@ testing, not a bug) — see "Known state" below before treating this as demo-rea
 cd apps/api
 cp .env.example .env      # fill in the keys below — see PROJECT_PLAN.md §9
 npm install
-npx prisma migrate dev --name init
+npx prisma migrate deploy
 npm run dev                # http://localhost:3001, docs at /docs
 ```
 
 Required: `DATABASE_URL`, `R2_*` (upload loop); `REDIS_URL` (must be `rediss://`, TLS —
-Upstash rejects plain `redis://`), `REMOVEBG_API_KEY` (pipeline). Portrait generation needs
-no key (free HF Space).
+Upstash rejects plain `redis://`) and `REPLICATE_API_TOKEN` (the pipeline itself — face
+detection is local/free, the swap call is the only paid step).
 
 Without a given key set, the server still boots (so you can browse `/docs`) — the specific
 routes/steps that need it fail clearly instead (a 500, a 503 on `/status`, or a skipped
@@ -36,99 +35,93 @@ enqueue with a logged warning) rather than crashing the process.
 | POST | `/api/sessions` | create a session with one or more characters (`storyId`, `characters: [{slot, childName}]`) |
 | GET | `/api/sessions/:id` | inspect a session + all its characters (QA convenience, not in original spec) |
 | POST | `/api/sessions/:id/characters/:characterId/upload-url` | presigned R2 PUT URL for that character's photo |
-| POST | `/api/sessions/:id/characters/:characterId/upload-confirm` | record the upload; enqueues the pipeline once *every* character in the session has uploaded |
-| GET | `/api/sessions/:id/status` | **SSE** — live progress per character/step, plus the final `composite` step and `done` event |
+| POST | `/api/sessions/:id/characters/:characterId/upload-confirm` | record the upload; enqueues the pipeline (mode `"preview"`) once *every* character in the session has uploaded |
+| POST | `/api/sessions/:id/render-full` | enqueues the rest of the book (mode `"full"`) — pages already rendered for the preview are reused, not re-paid for |
+| GET | `/api/sessions/:id/pages` | lists every page in the book with its render status and signed URL if ready |
+| GET | `/api/sessions/:id/status` | **SSE** — live progress per character/step, plus the final `done`/`error` event |
 
-`test/e2e.http` walks the original single-upload flow (pre-dates the multi-character
-pivot — kept for reference, not representative of the current API shape).
-`test/e2e-multichar.mjs` drives the current flow end-to-end:
-`node test/e2e-multichar.mjs <photo1> child_1 <name1> <photo2> child_2 <name2>`.
+`test/e2e.http` and `test/e2e-day2.mjs` predate the multi-character pivot and don't match the
+current API shape. Live scripts:
+- `test/e2e-single.mjs <photo> [childName]` — one character, preview pages only.
+- `test/e2e-multichar.mjs <storyId> <photo> <slot> <name> [<photo> <slot> <name> ...]` — N characters.
+- `demo/demo.mts` — narrated walkthrough of one page, for a screen recording (`--open` shows each step's image).
 
 ## Pipeline
 
-One BullMQ job per session. For **each character**, sequentially: `validate → portrait →
-remove_bg → skin_tone`. Once every character has finished, one final **`composite`** step
-combines them into the session's single preview image.
+One BullMQ job per session, mode `"preview"` (just the pages flagged `preview: true` in
+`templates.ts`) or `"full"` (the whole book, reusing any page already rendered). Per
+**character**, in parallel: `validate → skin_tone`. Once every character is ready, one `swap`
+step renders every page for that mode, up to `PAGE_CONCURRENCY` (default 3) pages in flight —
+each page may itself issue one swap call per drawn character on it, in parallel.
 
-1. **validate** — exactly one face detected in the raw upload + minimum resolution
-2. **portrait** — illustrated reference portrait via a free Hugging Face Space, stored as
-   that character's `portraitKey`
-3. **remove_bg** — background removed from the *generated portrait* (not the raw upload —
-   see below), stored as `noBgKey`
-4. **skin_tone** — sampled from the raw upload's face region, stored as `skinToneHex`
-   (informational; not yet fed back into generation)
-5. **composite** *(session-level, once)* — crops each character's face from their `noBgKey`
-   portrait and blends it (soft feathered mask, not a hard paste) onto its slot in the fixed
-   template, via Sharp — no AI call, so this step is fast and cheap regardless of character
-   count. Result stored as `Session.previewKey`; publishes the `done` SSE event with a signed
-   preview URL.
+1. **validate** (`validate.ts`) — exactly one face detected in the raw upload (blazeface,
+   confidence ≥ 0.9) + minimum resolution (200×200).
+2. **skin_tone** (`skinTone.ts`) — sampled from a cheek/chin band inside the detected face box
+   (narrower than the full box, to avoid hair/eyes/shadow pulling the average toward grey),
+   cached on the `Character` row so a later "full" render doesn't re-sample.
+3. **swap** *(per page, per drawn character on it)* — `personalize.ts` detects every drawn
+   character on the page (`faceDetect.ts`, blazeface — see "multi-character detection" below),
+   crops a padded region around each one, sends it to Replicate's face-swap model
+   (`faceSwap.ts`) with the child's photo as the source face, and pastes the swapped crop back
+   through a feathered elliptical mask (`personalize.ts`'s `faceOverlay`) so only the face
+   changes, not the surrounding art. Pages are rendered up to `PAGE_CONCURRENCY` at a time
+   (`pool.ts`); a page already in R2 (from a prior preview/attempt) is skipped, not re-paid for.
+4. **tone matching** *(optional, off by default — see `ToneSettings` in `templates.ts`)* —
+   `tone.ts`'s colour-distance recolouring shifts the drawn character's skin/hair toward the
+   child's own tone, sampled from the child's photo and from the page's *original* (pre-swap)
+   artwork. Pure pixel maths, no extra API cost. Off by default because it's a partial/soft
+   nudge by design (preserves the illustrator's shading rather than flat-filling) and hasn't
+   been validated end-to-end with tone actually enabled — see "Known state."
 
 Any step failure sets `status = failed` and emits an SSE `error` event (with the `slot` it
-happened on) with a user-facing message.
+happened on, if applicable) with a user-facing message; the full error is always logged
+server-side (`worker.ts`'s `runStep`) even when the SSE message is generic.
 
-### Notable implementation choices (deviations from the original proposal)
+### Notable implementation choices
 
-- **Face detection:** `@tensorflow/tfjs` (pure JS/WASM) + `blazeface` instead of
-  `face-api.js`, which needs the native `canvas` package — a real build risk on Windows under
-  this deadline. Shared between `validate.ts` (exactly-one-face check) and `composite.ts`
-  (locating a face within a generated portrait to crop it) via `src/pipeline/faceDetect.ts`.
-- **Portrait model:** no card/budget available, so this uses the free public Hugging Face
-  Space `InstantX/InstantID`, called via Gradio's HTTP API (upload → call → poll → download).
-  The style prompt is constrained to a **plain headshot only** (no props/accessories, looking
-  at camera) — the output gets face-detected and cropped for compositing, and a busier scene
-  pulls stray content (sunglasses, instruments, etc.) into that crop. Trade-off: shared free
-  GPU queue, so latency varies a lot (seconds to several minutes observed); the poll request
-  uses a 15-minute `undici` timeout, not Node's 5-minute default. Community-maintained — if
-  it becomes unreliable, swap to a paid model (Replicate version in git history before this
-  file's multi-character-pivot commits).
-- **Compositing, not re-generation, per page:** the expensive step (photo → illustrated
-  likeness) runs once per character; adding template pages later is just more `composite`
-  calls, not more generation calls. A literal ML face-swap tool (e.g. InsightFace inswapper)
-  was deliberately not used for this — see [PROJECT_PLAN.md §17](../../PROJECT_PLAN.md) for
-  why Sharp-based masked compositing was chosen instead.
-- **Template:** `assets/templates/two-children-park.png`, generated via the free
-  `black-forest-labs/FLUX.1-schnell` Space (no artist available yet) — swappable for real art
-  later; only `TEMPLATE_PATH`/`TEMPLATE_SLOTS` in `composite.ts` need to change. Its two face
-  slots were hand-verified by running blazeface against the image: detecting **both** faces
-  at once failed (the model only found one), but detecting each half of the image separately
-  found both reliably — a known blazeface limitation with multiple faces in one frame, not an
-  issue for compositing since the template is static and its slots are computed once, not at
-  request time.
-- **Job retries:** single job per session, `attempts: 1` (no automatic retry) — a failure
-  surfaces immediately via the `error` SSE event rather than needing BullMQ flows for
-  per-step retry differentiation.
+- **Engine: face-swap onto finished artwork, not generate-then-composite.** Replaces an
+  earlier architecture that generated a stylized portrait per child (via a paid or free
+  diffusion model) and pasted it into a template. That approach fought diffusion drift
+  (identity, pose) and needed per-template calibration. Swapping the child's face onto a
+  character the illustrator already drew and posed needs none of that — pose, lighting, hair
+  and headgear are correct by construction. See `faceSwap.ts` and
+  [PROJECT_PLAN.md §17](../../PROJECT_PLAN.md) for the full history.
+- **Model: `codeplugtech/face-swap` (InsightFace inswapper) on Replicate**, ~$0.007/run, CPU,
+  seconds. **Licensing is unresolved:** inswapper is published for non-commercial/research use;
+  InsightFace sell a separate commercial licence, which this paid product needs before launch.
+- **Face detection:** `@tensorflow/tfjs` (pure JS/WASM) + `blazeface` instead of `face-api.js`,
+  which needs the native `canvas` package — a real build risk on Windows. Shared by
+  `validate.ts` (exactly-one-face check on a raw photo) and `personalize.ts`
+  (`detectPageCharacters`, finding every drawn character on a page) via `faceDetect.ts`.
+- **Multi-character detection on a page:** a single whole-page blazeface pass is enough for a
+  solo-character page, but misses one of two children standing side by side in a wide frame,
+  and is sensitive to the *exact* crop width in a non-systematic way. `detectPageCharacters`
+  runs several overlapping crop windows and merges/dedupes whatever any of them find.
+- **Template art must be a soft-shaded/painterly style, not flat vector/cartoon.** The swap
+  model's own internal face detector (separate from our blazeface check) reliably fails to
+  find a face in flat-colour/thick-outline illustration, regardless of face size or pose — it
+  reports `status: "succeeded"` with no output, visible only in `prediction.logs` as "No face
+  found." Confirmed on the original `two-children-park.png` (replaced by
+  `two-children-park-v2.png`, generated to match `workshop`'s working painterly style). Brief
+  any future template art (or generation prompt) accordingly before investing in it.
+- **Job retries:** single job per session, `attempts: 1` (no automatic BullMQ retry) — a
+  failure surfaces immediately via the `error` SSE event. Within a single swap call,
+  `retry.ts`'s `fetchWithRetry` retries network errors, 5xx, and 429 (rate-limited) with
+  backoff honouring `Retry-After` when present — 4xx other than 429 is not retried, since the
+  request itself is wrong and retrying won't help.
 
-## Known state / what to verify next
+## Known state / what's verified vs. not
 
-The full pipeline (2 characters → composite → `done`) has been run successfully end-to-end.
-A follow-up pass fixed two visible quality issues from that run (hard rectangular seams at
-the paste edges; stray props bleeding into a face crop from a too-busy generated scene) via
-feathered-mask compositing and a tightened portrait prompt. Each fix was verified
-individually (the tightened prompt confirmed to produce a clean plain headshot on its own),
-but a second **combined** full run to visually confirm both fixes together started failing
-with a generic error at the portrait step.
+**Verified, through the real API (not just direct-call scripts):** a full multi-character
+session — create → upload 2 different children's photos → confirm → SSE through
+`validate`/`skin_tone`/`swap` → `done` — completed cleanly and produced correct per-character
+face swaps on both a single-character and a two-character page.
 
-**Root cause, confirmed via the worker's now-improved error logging (see below):** the free
-HF Space runs on ZeroGPU, which caps *anonymous/unauthenticated* callers at **~2 minutes of
-GPU quota per day**. This session made 10+ calls to it while testing — easily enough to
-exhaust that quota, after which the Space rejects further requests with a generic error. This
-is a real, quantified limitation of the free path, **not a code or network bug** — every
-individual piece (upload, call, poll, generation) was independently re-verified working right
-up until quota ran out. Two genuinely useful fixes came out of chasing this down anyway: an
-unhandled `ioredis` connection error was crashing the whole server (now has an error handler
-— `src/redis.ts`), and worker failures now log their full error/cause to the console (not
-just a generic message) so this is immediately diagnosable next time — `src/worker.ts`.
-
-**If repeated free-tier testing/demos become a blocker:** sign in with a free HF account for
-the calls (3.5 min/day instead of 2 — marginal), wait for the daily reset, or switch to a
-paid model (Replicate version in git history, or HF PRO at $9/mo for 25 min/day).
-
-Once quota resets, re-run this once for the final combined confirmation before a client demo
-(expected to succeed cleanly given every component works individually):
-
-```bash
-node test/e2e-multichar.mjs <photo1> child_1 <name1> <photo2> child_2 <name2>
-```
-
-See [PROJECT_PLAN.md §6–§7, §17](../../PROJECT_PLAN.md) for the full pipeline, API contract,
-and multi-character pivot writeup.
+**Not yet verified:**
+- `render-full` (rendering the rest of the book after the preview) has not been run even once.
+- Tone matching (`tone.skin`/`tone.hair`) has only been checked with synthetic target colours
+  on local assets, never through the real session flow with `tone` enabled.
+- Only two of the book's five pages (`workshop`, `park`) have template art confirmed compatible
+  with the swap model. The other three (`astronaut`, `pilot`, `architect`) were found to be
+  screenshots of a reference competitor app with foreign UI baked into the image pixels, not
+  usable template art at all — they need replacing, not just a compatibility check.

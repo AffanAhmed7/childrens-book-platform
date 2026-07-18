@@ -15,6 +15,7 @@ Client: _private engagement_ · Engagement: Prototype build · Delivery window: 
 | 2026-07-16 | Portrait model: free public Hugging Face Space (`InstantX/InstantID`), not Replicate | No card/budget available. Verified end-to-end with a real photo — good watercolor-style, identity-preserving results. Trade-off: shared free GPU queue (latency ranges seconds-to-minutes), community-maintained. Replicate version preserved in git history if a paid, more reliable path is wanted later. See `apps/api/README.md` |
 | 2026-07-16 | Pipeline job: single BullMQ job per session, `attempts: 1` (no auto-retry), not per-step retry differentiation | Per-step retry policy would need BullMQ flows (linked jobs) — more machinery than a 3-day prototype warrants; failures surface immediately via the `error` SSE event |
 | 2026-07-16 | **Scope pivot: multi-character + template-based compositing**, superseding the single-character "generate one preview" design | Client wants a small-scale proof of Imagitime's actual architecture (one stylized portrait per child, reused via fast compositing — not regenerated per page) plus **true multi-character** now, not deferred. New Session→many Character data model, per-character upload endpoints, and a new `composite` pipeline step. Full detail in the approved plan; see §17 below and `apps/api/README.md` |
+| 2026-07-17 | **Second pivot: face-swap onto finished artwork, superseding §17's generate-a-portrait-then-composite design** | The free HF Space's ZeroGPU quota (~2 min/day for anonymous callers, see §17) made repeated generation unworkable, and diffusion still fought identity/pose drift even within quota. Replaced with `codeplugtech/face-swap` (Replicate, ~$0.007/run) swapping the child's face directly onto the character the illustrator already drew and posed — no diffusion, no per-template calibration, no portrait/remove_bg/composite steps. `portrait.ts`/`removeBg.ts`/`composite.ts` deleted; see `apps/api/README.md` for the current architecture (§17 below is left as historical record of the design it replaced). Multi-character face-swap has since been run successfully end-to-end through the real API. **New, unresolved risk this pivot introduces:** inswapper is licensed for non-commercial/research use only — needs a commercial licence before this can ship as a paid product (see `faceSwap.ts`). |
 
 ---
 
@@ -399,19 +400,29 @@ compositing geometry).
 
 ## 14. Deliverables Checklist (mapped to proposal)
 
-- [ ] Photo upload (presigned, direct-to-R2)
-- [ ] Face validation (single face + resolution/type)
-- [ ] Background removal (remove.bg)
-- [ ] Skin-tone extraction (Sharp)
-- [ ] Portrait / illustrated-character generation (Replicate, off-the-shelf)
-- [ ] Compositing onto scene template (Sharp)
-- [ ] Live SSE status with the specified copy
-- [ ] One final preview image
-- [x] ~~Browser test UI~~ — **deferred** (client confirmed API-only, 2026-07-15); Swagger UI at `/docs` + `test/e2e.http` serve as the demo/QA surface
-- [ ] Documented API (OpenAPI at `/docs`) — primary interface
-- [ ] Deployed prototype (API) with a shareable Swagger `/docs` demo URL
-- [ ] GitHub repo with timely, meaningful commit history
-- [ ] This plan + README + architecture/API/risk docs
+Updated 2026-07-17 to reflect the face-swap pivot (see Decision Log) — several original items
+were superseded by a different mechanism rather than left undone; noted explicitly below.
+
+- [x] Photo upload (presigned, direct-to-R2) — verified via real sessions
+- [x] Face validation (single face + resolution/type) — `validate.ts`, verified
+- [x] ~~Background removal (remove.bg)~~ — **superseded**: the face-swap architecture swaps
+      directly onto the drawn character's existing background, so this step doesn't exist
+      anymore. `removeBg.ts` deleted.
+- [x] Skin-tone extraction (Sharp) — `skinTone.ts`, verified; feeds an optional tone-matching
+      pass (`tone.ts`) that's implemented but still off by default (not yet validated with tone
+      enabled end-to-end)
+- [x] ~~Portrait / illustrated-character generation (Replicate, off-the-shelf)~~ —
+      **superseded**: no portrait is generated; the child's face is swapped directly onto the
+      illustrator's existing drawn character. `portrait.ts` deleted.
+- [x] ~~Compositing onto scene template (Sharp)~~ — **superseded** by the swap's own feathered
+      -mask overlay (`personalize.ts`'s `faceOverlay`); `composite.ts` deleted.
+- [x] Live SSE status with the specified copy — verified via real sessions
+- [x] One final preview image — verified (multi-character page rendered correctly end-to-end)
+- [x] ~~Browser test UI~~ — **deferred** (client confirmed API-only, 2026-07-15); Swagger UI at `/docs` + `test/e2e-multichar.mjs` serve as the demo/QA surface
+- [x] Documented API (OpenAPI at `/docs`) — primary interface
+- [ ] Deployed prototype (API) with a shareable Swagger `/docs` demo URL — still local-only, not hosted
+- [x] GitHub repo with timely, meaningful commit history
+- [x] This plan + README + architecture/API/risk docs — README rewritten 2026-07-17 to match the current architecture
 
 ---
 

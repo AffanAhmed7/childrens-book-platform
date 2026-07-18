@@ -12,3 +12,10 @@ export interface ValidationResult {
   height: number;
   faceBox: FaceBox;
 }
+
+export interface CharacterInput {
+  slot: string;
+  photoUrl: string; // signed URL of the child's photo (the face source)
+  skinToneHex?: string | null;
+  hairToneHex?: string | null;
+}

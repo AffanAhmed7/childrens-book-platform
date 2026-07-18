@@ -31,34 +31,19 @@ export interface HairVariant {
   imagePath: string;
 }
 
-export interface ToneSettings {
-  // !! Both default OFF — the passes are implemented but UNTESTED. !!
-  // See tone.ts. They must be validated against a child whose skin/hair differs
-  // sharply from the drawn character before being enabled, because the risk is
-  // recolouring scene objects that share the same colour range.
-  skin: boolean;
-  hair: boolean;
-  skinTolerance?: number;
-  skinStrength?: number;
-  hairTolerance?: number;
-  hairStrength?: number;
-}
-
 export interface BookConfig {
   title: string;
   pages: BookPage[];
   hairVariants?: HairVariant[];
-  tone?: ToneSettings;
 }
-
-export const DEFAULT_TONE: ToneSettings = { skin: false, hair: false };
 
 const ASSETS = path.resolve(process.cwd(), "../../assets/templates");
 
-// Multi-character books need no extra machinery: personalize.ts detects every
-// drawn character on a page and swaps each mapped child onto their own. Faces
-// are matched left-to-right against the session's character slots, so a page
-// drawn with two children just works once the session has child_1 and child_2.
+// Multi-character books need no extra machinery: scene.ts's personalizePage
+// detects every drawn character on a page and personalizes each mapped child
+// onto their own. Faces are matched left-to-right against the session's
+// character slots, so a page drawn with two children just works once the
+// session has child_1 and child_2.
 // Use `slots` only when a page's drawn order isn't left-to-right, or when a page
 // features a subset of the cast:
 //
@@ -73,7 +58,6 @@ const ASSETS = path.resolve(process.cwd(), "../../assets/templates");
 export const BOOKS: Record<string, BookConfig> = {
   "demo-book": {
     title: "Demo book — mixed scenes",
-    tone: DEFAULT_TONE,
     pages: [
       {
         id: "workshop",
@@ -82,8 +66,14 @@ export const BOOKS: Record<string, BookConfig> = {
         preview: true,
       },
       { id: "astronaut", imagePath: path.join(ASSETS, "temp_1.jpeg"), caption: "Floating among the planets" },
-      { id: "pilot", imagePath: path.join(ASSETS, "temp_2.jpeg"), caption: "Taking to the skies" },
-      { id: "architect", imagePath: path.join(ASSETS, "temp_3.jpeg"), caption: "Building the city" },
+      // NOT wired in: assets/templates/temp_2.jpeg and temp_3.jpeg. These are
+      // screenshots of a reference competitor app (UI buttons in French —
+      // "Télécharger une autre photo" on temp_2, "Enregistrer l'aperçu et
+      // afficher le prix" on temp_3 — are baked directly into the image
+      // pixels, not an overlay), not usable template art. Wiring them in
+      // would ship someone else's app chrome as this product's own page art.
+      // Needs real replacement art — not attempted here (no image generation
+      // without explicit direction).
       // NOT wired in: assets/templates/two-children-park.png (2 drawn characters,
       // girl left/boy right — our own blazeface detection finds both faces
       // fine). But the swap MODEL's own internal face detector fails on this
@@ -116,10 +106,6 @@ export function getBook(storyId: string): BookConfig {
     throw new Error(`No book configured for storyId "${storyId}".`);
   }
   return book;
-}
-
-export function getTone(book: BookConfig): ToneSettings {
-  return book.tone ?? DEFAULT_TONE;
 }
 
 // Preview mode renders only the flagged pages; if a book flags none, the first

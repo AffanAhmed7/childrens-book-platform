@@ -2,10 +2,14 @@ import { createHash } from "node:crypto";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import sharp from "sharp";
-import { detectFaces } from "./faceDetect";
+import { detectFaces, detectPageCharacters, cropBox } from "./faceDetect";
+import type { BookPage } from "./templates";
+import { mapWithConcurrency } from "./pool";
 import { runReplicate, fetchToBuffer } from "./replicate";
 import { REPAINT_PROMPT, type SceneTemplate } from "./scenes";
-import type { FaceBox } from "./types";
+import type { CharacterInput, FaceBox } from "./types";
+
+export class PersonalizeError extends Error {}
 
 // The "scene" recipe: repaint the whole illustration as the child, then swap for
 // exact identity, restore to blend swap artifacts, and heal any leftover specks.
@@ -18,13 +22,15 @@ const CODEFORMER_VERSION = "cc4956dd26fa5a7185d5660cc9100fab1b8070a1d1654a8bb5eb
 
 const dataUri = (buf: Buffer, ext = "png") => `data:image/${ext};base64,${buf.toString("base64")}`;
 
-// Repaint is the pipeline's expensive, slow call (~$0.039, 90-170s — google/nano
-// -banana billed per-image regardless of how many times the same template+photo
-// pair is repainted). Dev/demo runs (npm run personalize) re-test the same photo
-// against the same template repeatedly while tuning swap/restore/heal, so cache
-// the repaint output on disk keyed by exactly what determines it: the cropped
-// template bytes, the prompt, and the photo. Not used by the production per-page
-// pipeline (personalize.ts), which never calls repaintScene.
+// Repaint is the pipeline's expensive call (~$0.039, google/nano-banana billed
+// per-image regardless of how many times the same template+photo pair is
+// repainted). Dev/demo runs (npm run personalize) re-test the same photo against
+// the same template repeatedly while tuning swap/restore/heal, so cache the
+// repaint output on disk keyed by exactly what determines it: the cropped
+// template bytes, the prompt, and the photo. In production this cache key never
+// repeats — childPhotoUrl mints a fresh signed URL per call — so it doesn't fire
+// there; production's dedup is worker.ts's page-level objectExists(key) skip,
+// which already avoids ever re-paying for an already-rendered page.
 const REPAINT_CACHE_DIR = path.resolve(process.cwd(), ".cache/repaint");
 
 // nano-banana-2-lite is a cost/latency comparison candidate (~$0.0336/image,
@@ -275,23 +281,19 @@ export interface PersonalizeSceneOptions {
 }
 
 /**
- * Personalizes one scene template with one child's photo, end to end.
+ * The recipe, on any in-memory crop: repaint the whole buffer as this child,
+ * then (optionally) swap for exact identity, restore to blend swap artifacts,
+ * and heal any leftover specks.
  *
- * @param scene    a SceneTemplate from scenes.ts (carries the chrome crop)
- * @param photoBuf the child's photo bytes
- * @param photoExt "png" | "jpeg" (how to tag the data URI handed to the models)
+ * @param templateBuf the art to repaint (a whole scene, or a crop of one)
+ * @param photoUri    URL or data URI of the child's photo (the face source)
  */
-export async function personalizeScene(
-  scene: SceneTemplate,
-  photoBuf: Buffer,
-  photoExt: "png" | "jpeg",
+export async function personalizeBuffer(
+  templateBuf: Buffer,
+  photoUri: string,
   opts: PersonalizeSceneOptions = {},
 ): Promise<Buffer> {
   const { swap = true, restore = true, heal = true, repaintModel = "nano-banana", onStage } = opts;
-
-  let templateBuf: Buffer = await readFile(scene.imagePath);
-  if (scene.crop) templateBuf = await sharp(templateBuf).extract(scene.crop as FaceBox).png().toBuffer();
-  const photoUri = dataUri(photoBuf, photoExt);
 
   let result = await repaintScene(templateBuf, photoUri, repaintModel);
   await onStage?.("repaint", result);
@@ -311,4 +313,130 @@ export async function personalizeScene(
   }
 
   return result;
+}
+
+/**
+ * Personalizes one scene template with one child's photo, end to end. Thin
+ * wrapper around personalizeBuffer for the demo CLI, which works from a local
+ * template file + photo bytes rather than an already-loaded page/crop.
+ *
+ * @param scene    a SceneTemplate from scenes.ts (carries the chrome crop)
+ * @param photoBuf the child's photo bytes
+ * @param photoExt "png" | "jpeg" (how to tag the data URI handed to the models)
+ */
+export async function personalizeScene(
+  scene: SceneTemplate,
+  photoBuf: Buffer,
+  photoExt: "png" | "jpeg",
+  opts: PersonalizeSceneOptions = {},
+): Promise<Buffer> {
+  let templateBuf: Buffer = await readFile(scene.imagePath);
+  if (scene.crop) templateBuf = await sharp(templateBuf).extract(scene.crop as FaceBox).png().toBuffer();
+  return personalizeBuffer(templateBuf, dataUri(photoBuf, photoExt), opts);
+}
+
+// How much wider than a face-swap crop (cropBox's 1.1x default) a repaint crop
+// needs to be: repaint redraws hair and visible skin, not just the face, so it
+// needs the child's whole head and some shoulder/arm in frame. Bigger than the
+// swap-only crop, short of tone.ts's characterRegion (which was sized to grab
+// hands/arms for colour sampling, not to bound a redraw).
+const REPAINT_CROP_PADDING_X = 1.8;
+const REPAINT_CROP_PADDING_Y = 2.2;
+
+// A page may have more crop/repaint calls in flight than PAGE_CONCURRENCY
+// pages are already running — cap per-page character concurrency too so a
+// pathological many-character page can't spike total in-flight Replicate calls.
+const CHARACTER_CONCURRENCY = 3;
+
+/**
+ * Feathers a finished (repainted) crop back onto its rectangular slot: full
+ * opacity in the middle, fading to transparent within a margin of each edge.
+ * Wider than the old face-only ellipse the swap-only pipeline used, because
+ * repaint changes hair/skin over the whole crop, not just the face — this is
+ * the one genuinely new, unverified piece of the multi-character path.
+ * UNVERIFIED: confirm there's no visible seam/tone-shift against a real
+ * multi-character page before trusting this for production.
+ */
+async function cropOverlay(finishedCrop: Buffer, crop: FaceBox): Promise<sharp.OverlayOptions> {
+  const normalized = await sharp(finishedCrop).resize(crop.width, crop.height, { fit: "fill" }).ensureAlpha().toBuffer();
+
+  const marginX = Math.max(4, Math.round(crop.width * 0.15));
+  const marginY = Math.max(4, Math.round(crop.height * 0.15));
+  const edgeFade = (pos: number, size: number, margin: number) => {
+    if (pos < margin) return pos / margin;
+    if (pos > size - margin) return (size - pos) / margin;
+    return 1;
+  };
+
+  const rgba = Buffer.alloc(crop.width * crop.height * 4);
+  const { data: src, info } = await sharp(normalized).raw().toBuffer({ resolveWithObject: true });
+  for (let y = 0; y < crop.height; y += 1) {
+    const fy = edgeFade(y, crop.height, marginY);
+    for (let x = 0; x < crop.width; x += 1) {
+      const fx = edgeFade(x, crop.width, marginX);
+      const si = (y * crop.width + x) * info.channels;
+      const di = (y * crop.width + x) * 4;
+      rgba[di] = src[si] ?? 0;
+      rgba[di + 1] = src[si + 1] ?? 0;
+      rgba[di + 2] = src[si + 2] ?? 0;
+      rgba[di + 3] = Math.round(255 * Math.max(0, Math.min(1, fx * fy)));
+    }
+  }
+  const png = await sharp(rgba, { raw: { width: crop.width, height: crop.height, channels: 4 } }).png().toBuffer();
+  return { input: png, left: crop.left, top: crop.top };
+}
+
+/**
+ * Personalizes one book page with any number of drawn characters, end to end.
+ *
+ * One drawn character: the whole page is repainted directly (proven — same
+ * recipe as the single-character demo templates), no compositing needed.
+ *
+ * More than one: each drawn character gets its own generous crop, repainted
+ * and swapped individually against their own photo (so every child keeps the
+ * fully-proven single-child prompt/recipe), then the finished crops are
+ * feathered back onto the original page background. UNVERIFIED against a real
+ * multi-character page — see cropOverlay's seam-risk note.
+ */
+export async function personalizePage(
+  page: BookPage,
+  characters: CharacterInput[],
+  opts: PersonalizeSceneOptions = {},
+): Promise<Buffer> {
+  const original = await readFile(page.imagePath);
+
+  const drawnFaces = await detectPageCharacters(original);
+  if (drawnFaces.length === 0) {
+    throw new PersonalizeError(`No character face detected on page "${page.id}".`);
+  }
+
+  const slotOrder = page.slots ?? characters.map((c) => c.slot);
+  const assignments: { face: FaceBox; character: CharacterInput }[] = [];
+  for (let i = 0; i < drawnFaces.length; i += 1) {
+    const slot = slotOrder[i];
+    const character = slot ? characters.find((c) => c.slot === slot) : undefined;
+    const face = drawnFaces[i];
+    if (character && face) assignments.push({ face, character });
+  }
+  if (assignments.length === 0) {
+    throw new PersonalizeError(`No character on page "${page.id}" maps to an uploaded child.`);
+  }
+
+  if (assignments.length === 1) {
+    const only = assignments[0] as { face: FaceBox; character: CharacterInput };
+    return personalizeBuffer(original, only.character.photoUrl, opts);
+  }
+
+  const meta = await sharp(original).metadata();
+  const width = meta.width ?? 0;
+  const height = meta.height ?? 0;
+
+  const overlays = await mapWithConcurrency(assignments, CHARACTER_CONCURRENCY, async ({ face, character }) => {
+    const crop = cropBox(face, width, height, REPAINT_CROP_PADDING_X, REPAINT_CROP_PADDING_Y);
+    const cropBuffer = await sharp(original).extract(crop).png().toBuffer();
+    const finished = await personalizeBuffer(cropBuffer, character.photoUrl, opts);
+    return cropOverlay(finished, crop);
+  });
+
+  return sharp(original).ensureAlpha().composite(overlays).png().toBuffer();
 }

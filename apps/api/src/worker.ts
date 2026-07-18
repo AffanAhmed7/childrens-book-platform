@@ -4,13 +4,12 @@ import { PIPELINE_QUEUE_NAME, type PipelineJobData } from "./queue";
 import { prisma } from "./db";
 import { publishStatus } from "./status-events";
 import { STEP_MESSAGES } from "./messages";
-import type { PipelineStep } from "./pipeline/types";
+import type { CharacterInput, PipelineStep } from "./pipeline/types";
 import { validatePhoto } from "./pipeline/validate";
 import { extractSkinTone } from "./pipeline/skinTone";
-import { extractHairTone } from "./pipeline/tone";
 import { childPhotoUrl } from "./pipeline/faceSwap";
-import { personalizePage, type CharacterInput } from "./pipeline/personalize";
-import { getBook, getTone, pagesFor, pageObjectKey, type BookPage } from "./pipeline/templates";
+import { personalizePage } from "./pipeline/scene";
+import { getBook, pagesFor, pageObjectKey, type BookPage } from "./pipeline/templates";
 import { mapWithConcurrency } from "./pipeline/pool";
 import { createDownloadUrl, putObject, objectExists } from "./storage";
 
@@ -48,7 +47,6 @@ async function processJob(job: Job<PipelineJobData>): Promise<void> {
     data: { status: "processing" },
   });
   const book = getBook(session.storyId);
-  const tone = getTone(book);
   const pages = pagesFor(book, mode);
 
   const characterRows = await prisma.character.findMany({ where: { sessionId }, orderBy: { slot: "asc" } });
@@ -77,15 +75,10 @@ async function processJob(job: Job<PipelineJobData>): Promise<void> {
         await prisma.character.update({ where: { id: character.id }, data: { skinToneHex } });
       }
 
-      // Only sampled when the hair pass is on — it's cheap, but there's no
-      // reason to read the photo again for a pass that won't run.
-      const hairToneHex = tone.hair ? await extractHairTone(rawKey, validation.faceBox) : null;
-
       return {
         slot: character.slot,
         photoUrl: await childPhotoUrl(rawKey),
         skinToneHex,
-        hairToneHex,
       } satisfies CharacterInput;
     }),
   );
@@ -96,7 +89,7 @@ async function processJob(job: Job<PipelineJobData>): Promise<void> {
       // Never pay twice for the same page: a retried job, or a "full" run after
       // a preview, reuses whatever is already rendered.
       if (await objectExists(key)) return;
-      const finished = await personalizePage(page, characters, tone);
+      const finished = await personalizePage(page, characters);
       await putObject(key, finished, "image/png");
     }),
   );
