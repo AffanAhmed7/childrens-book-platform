@@ -20,6 +20,12 @@ export interface BookPage {
   // of the faces on the page. Omit when the drawn order already matches the
   // session's character order (the common case).
   slots?: string[];
+  // Caps detection at this many highest-confidence faces — a defence against
+  // a specific known false positive on this page's art (e.g. a background
+  // detail misread as a face), NOT a way to select a subset of a page that
+  // genuinely draws more characters than are in the cast (use `slots` for
+  // that). Only set this when a real false positive has been observed.
+  expectedCharacterCount?: number;
 }
 
 export interface HairVariant {

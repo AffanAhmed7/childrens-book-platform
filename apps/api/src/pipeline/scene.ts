@@ -38,6 +38,33 @@ const REPAINT_CACHE_DIR = path.resolve(process.cwd(), ".cache/repaint");
 // templates, so it's opt-in, not the default. See docs/DEMO_PLAN.md.
 export type RepaintModel = "nano-banana" | "nano-banana-2-lite";
 
+// google/nano-banana's `aspect_ratio` input defaults to "match_input_image", but
+// `image_input` carries TWO images (the template crop AND the child's photo) and
+// it resolves against the PHOTO. Measured on MC_1: a 0.80 portrait crop with a
+// 1.50 photo returned a 1.50 landscape frame; nano-banana re-composed the scene
+// to fill it and the face shrank from 32.7% to 19.8% of frame width, at which
+// point the swap model's detector failed 5/5. A square photo on the same page
+// distorted less and swapped fine. Left alone, whether a page renders depends on
+// the shape of the selfie a parent happens to upload. Pinning the ratio to the
+// template crop makes output geometry independent of the photo. The input is an
+// enum, so snap to the nearest supported value.
+const NANO_BANANA_RATIOS: ReadonlyArray<readonly [string, number]> = [
+  ["1:1", 1], ["2:3", 2 / 3], ["3:2", 3 / 2], ["3:4", 3 / 4], ["4:3", 4 / 3],
+  ["4:5", 4 / 5], ["5:4", 5 / 4], ["9:16", 9 / 16], ["16:9", 16 / 9], ["21:9", 21 / 9],
+];
+
+export function nearestAspectRatio(width: number, height: number): string {
+  const target = width / Math.max(1, height);
+  return NANO_BANANA_RATIOS.reduce((best, cur) =>
+    Math.abs(cur[1] - target) < Math.abs(best[1] - target) ? cur : best,
+  )[0];
+}
+
+async function templateAspectRatio(templateBuf: Buffer): Promise<string> {
+  const meta = await sharp(templateBuf).metadata();
+  return nearestAspectRatio(meta.width ?? 1, meta.height ?? 1);
+}
+
 function repaintCacheKey(templateBuf: Buffer, photoUri: string, model: RepaintModel): string {
   return createHash("sha256").update(model).update(REPAINT_PROMPT).update(templateBuf).update(photoUri).digest("hex");
 }
@@ -59,7 +86,12 @@ export async function repaintScene(templateBuf: Buffer, photoUri: string, model:
           input: { prompt: REPAINT_PROMPT, images: [dataUri(templateBuf), photoUri], match_input_image: true, output_format: "png" },
         })
       : await runReplicate("models/google/nano-banana/predictions", {
-          input: { prompt: REPAINT_PROMPT, image_input: [dataUri(templateBuf), photoUri], output_format: "png" },
+          input: {
+            prompt: REPAINT_PROMPT,
+            image_input: [dataUri(templateBuf), photoUri],
+            output_format: "png",
+            aspect_ratio: await templateAspectRatio(templateBuf),
+          },
         });
   const result = await fetchToBuffer(url);
 
@@ -68,12 +100,30 @@ export async function repaintScene(templateBuf: Buffer, photoUri: string, model:
   return result;
 }
 
-/** Stage 2 — sharpen identity to exactly this child (codeplugtech/face-swap). */
+/** Stage 2 — sharpen identity to exactly this child (codeplugtech/face-swap).
+ * noFaceRetries: 4 — this model's own face detector false-negatives ("No face
+ * found") on some target/photo pairs far more than others; see runReplicate's
+ * noFaceRetries doc. UNRESOLVED, not just mitigated: on MC_1.jpeg with photo
+ * test-photos/3.jpg, one character's face has now failed roughly 17 of 18
+ * real attempts, across many different repaint generations and crop-geometry
+ * versions, including two full 5-attempt runs (this constant's retry budget)
+ * that both failed all 5 — so 4 retries is NOT proven to reliably recover
+ * this specific photo/character pairing; treat any success on it as fortunate,
+ * not expected. The other character on the same page succeeds essentially
+ * every time, so this isn't a crop/prompt regression — every other fix in
+ * this file (crop overlap, limb bleed, aspect ratio, ghost-halo compositing)
+ * is separately confirmed and unaffected by this. Root cause still open:
+ * possibly this one photo, possibly this swap model being weaker on
+ * children's faces generally — untested, needs one real repaint+swap trial
+ * with a different child photo to distinguish. Retries are cheap insurance
+ * for ordinary flakiness either way, just don't read a high retry count as a
+ * reliability guarantee for every child photo. */
 export async function swapIdentity(targetBuf: Buffer, photoUri: string): Promise<Buffer> {
-  const url = await runReplicate("predictions", {
-    version: FACE_SWAP_VERSION,
-    input: { input_image: dataUri(targetBuf), swap_image: photoUri },
-  });
+  const url = await runReplicate(
+    "predictions",
+    { version: FACE_SWAP_VERSION, input: { input_image: dataUri(targetBuf), swap_image: photoUri } },
+    4,
+  );
   return fetchToBuffer(url);
 }
 
@@ -270,14 +320,86 @@ export async function healSwapArtifacts(imageBuf: Buffer): Promise<Buffer> {
   return sharp(imageBuf).composite(overlays).png().toBuffer();
 }
 
+// How far the eye patch reaches, as a multiple of the inter-eye distance. The
+// swap's malformed iris is WIDER than the eye it replaced, so a patch sized to
+// the eye alone leaves a brown crescent below it (measured on MC_3: clean only
+// from ~0.65 x 0.58 up; 0.42 x 0.34 and 0.55 x 0.48 both left a visible ring).
+const EYE_PATCH_RX = 0.65;
+const EYE_PATCH_RY = 0.58;
+const EYE_PATCH_FEATHER = 0.35; // fraction of the radius spent fading out
+
+/**
+ * Stage 5 — put the repaint's eyes back over the swap's.
+ *
+ * The swap model aligns the photo's face to the repaint's landmarks. On a
+ * children's-book child those landmarks describe a large stylised eye, so the
+ * photo's much smaller real eye lands inside it and the repaint's original iris
+ * survives around the edge as a dark ring — the "small eye floating in a brown
+ * disc" artifact. It is produced INSIDE the swap output, so it is not a
+ * compositing bug here: CodeFormer cannot repair it at any fidelity (swept
+ * 0.8/0.5/0.3/0.1 — it degrades, losing the pupil entirely by 0.1), and
+ * healSwapArtifacts deliberately only touches NEAR-WHITE specks while this
+ * artifact is dark.
+ *
+ * Painting the repaint's eye region back is the one lever that removes it
+ * cleanly. The cost is honest and worth stating: the child keeps the
+ * illustration's eye colour and shape rather than the photograph's, so identity
+ * comes from face shape, skin and hair instead. Runs LAST so nothing downstream
+ * can reintroduce the artifact.
+ *
+ * Fail-safe: no face or no landmarks means the image is returned untouched.
+ */
+export async function restoreEyeRegion(swappedBuf: Buffer, repaintBuf: Buffer): Promise<Buffer> {
+  const { faces } = await detectFaces(swappedBuf);
+  if (faces.length === 0) return swappedBuf;
+  const face = [...faces].sort((a, b) => b.box.width * b.box.height - a.box.width * a.box.height)[0];
+  const lm = face?.landmarks;
+  if (!face || !lm) return swappedBuf;
+
+  const meta = await sharp(swappedBuf).metadata();
+  const W = meta.width ?? 0;
+  const H = meta.height ?? 0;
+  if (W === 0 || H === 0) return swappedBuf;
+
+  // The repaint is the same crop, but restore/heal upstream may have changed the
+  // pixel grid — align defensively before sampling.
+  const repaintRaw = await sharp(repaintBuf).resize(W, H, { fit: "fill" }).removeAlpha().toColourspace("srgb").raw().toBuffer();
+  const swapRaw = await sharp(swappedBuf).removeAlpha().toColourspace("srgb").raw().toBuffer();
+
+  const eyeDist = Math.hypot(lm.leftEye.x - lm.rightEye.x, lm.leftEye.y - lm.rightEye.y) || face.box.width * 0.3;
+  const rx = eyeDist * EYE_PATCH_RX;
+  const ry = eyeDist * EYE_PATCH_RY;
+
+  const out = Buffer.from(swapRaw);
+  for (const eye of [lm.leftEye, lm.rightEye]) {
+    const x0 = Math.max(0, Math.floor(eye.x - rx));
+    const x1 = Math.min(W, Math.ceil(eye.x + rx));
+    const y0 = Math.max(0, Math.floor(eye.y - ry));
+    const y1 = Math.min(H, Math.ceil(eye.y + ry));
+    for (let y = y0; y < y1; y += 1) {
+      for (let x = x0; x < x1; x += 1) {
+        const d = Math.hypot((x - eye.x) / rx, (y - eye.y) / ry);
+        if (d >= 1) continue;
+        const a = d < 1 - EYE_PATCH_FEATHER ? 1 : (1 - d) / EYE_PATCH_FEATHER;
+        const i = (y * W + x) * 3;
+        for (let c = 0; c < 3; c += 1) {
+          out[i + c] = Math.round((swapRaw[i + c] ?? 0) * (1 - a) + (repaintRaw[i + c] ?? 0) * a);
+        }
+      }
+    }
+  }
+  return sharp(out, { raw: { width: W, height: H, channels: 3 } }).png().toBuffer();
+}
+
 export interface PersonalizeSceneOptions {
   swap?: boolean; // default true
   restore?: boolean; // default true (only runs when swap ran)
   heal?: boolean; // default true (only runs when swap ran)
+  eyeFix?: boolean; // default true (only runs when swap ran) — see restoreEyeRegion
   repaintModel?: RepaintModel; // default "nano-banana"
   // Called after each stage with a copy of the intermediate — lets a CLI save
   // debug frames without the engine knowing about the filesystem.
-  onStage?: (stage: "repaint" | "swap" | "restore" | "heal", image: Buffer) => void | Promise<void>;
+  onStage?: (stage: "repaint" | "swap" | "restore" | "heal" | "eyes", image: Buffer) => void | Promise<void>;
 }
 
 /**
@@ -293,12 +415,14 @@ export async function personalizeBuffer(
   photoUri: string,
   opts: PersonalizeSceneOptions = {},
 ): Promise<Buffer> {
-  const { swap = true, restore = true, heal = true, repaintModel = "nano-banana", onStage } = opts;
+  const { swap = true, restore = true, heal = true, eyeFix = true, repaintModel = "nano-banana", onStage } = opts;
 
   let result = await repaintScene(templateBuf, photoUri, repaintModel);
   await onStage?.("repaint", result);
 
   if (swap) {
+    // Kept for restoreEyeRegion — it needs the pre-swap eyes to paint back.
+    const repainted = result;
     result = await swapIdentity(result, photoUri);
     await onStage?.("swap", result);
 
@@ -309,6 +433,11 @@ export async function personalizeBuffer(
     if (heal) {
       result = await healSwapArtifacts(result);
       await onStage?.("heal", result);
+    }
+    // Last, so neither restore nor heal can reintroduce the iris ring.
+    if (eyeFix) {
+      result = await restoreEyeRegion(result, repainted);
+      await onStage?.("eyes", result);
     }
   }
 
@@ -343,6 +472,99 @@ export async function personalizeScene(
 const REPAINT_CROP_PADDING_X = 1.8;
 const REPAINT_CROP_PADDING_Y = 2.2;
 
+// How much of the gap to a horizontal neighbour a crop is allowed to reach
+// into, as a fraction of the gap between the two faces. NOT 0.5 (the
+// midpoint): measured on MC_1.jpeg (417x502, faces ~78px, 72px face-to-face
+// gap), a raised hand reaching toward the other character starts ~20px into
+// the gap from the near face's edge (~28% of the gap) — well short of the
+// midpoint. At the midpoint clamp, the repaint crop for the boy caught the
+// man's fingertips; nano-banana's repaint then hallucinated a second,
+// partial head from that fragment (same hairstyle as the real boy, cut off
+// at the crop edge), and the swap model's face detector picked between the
+// two inconsistently — "Couldn't find a usable face" on 4 of 5 real repaint+
+// swap attempts against the exact same crop. 0.25 was confirmed clean by
+// bisecting the actual crop width against that hand (safe up to ~198px,
+// artifact visible at 200px; 0.25 of the 72px gap lands at 196px).
+const NEIGHBOR_CLAIM_FRACTION = 0.25;
+
+// The proven single-character scenes (scenes.ts SCENES) all crop landscape or
+// square — astronaut 800x750 (1.07), workshop 800x739 (1.08), plane 810x649
+// (1.25) — never taller than wide. A standing character clamped tight against
+// a neighbour is the opposite: cropBox's Y padding (2.2x face height) is
+// unconstrained by a neighbour the way X is, so on MC_1.jpeg the clamped crop
+// came out 196x470 — ratio 0.42, over twice as tall as the widest proven crop
+// is narrow. nano-banana returned visibly inconsistent output geometry on it
+// (896x1152 for this crop vs. a clean 1024x1024 square for the unclamped
+// neighbour) and hallucinated a small unexplained artifact near the horizon —
+// then the swap model's face detector failed on 8 of 10 real attempts against
+// several different repaints of this same crop, vs. the square neighbour
+// crop succeeding essentially every time. Capping height to width kept in the
+// proven range fixes the shape without touching NEIGHBOR_CLAIM_FRACTION.
+const MAX_HEIGHT_TO_WIDTH = 1.25;
+
+/**
+ * The repaint crop for one drawn character, bounded so it can never reach a
+ * neighbouring character's face — or, close enough, their gesturing hand —
+ * and shaped like the crops the recipe is actually proven on.
+ *
+ * The padding in cropBox is generous by design — repaint redraws hair and
+ * shoulders, not just the face. On a page where characters stand close
+ * together that padding overruns the neighbour, and a crop holding any hint
+ * of a second character has no defined behaviour: REPAINT_PROMPT describes a
+ * single child ("Redraw the illustrated child"), and swapIdentity picks a
+ * face on its own. Measured on MC_1.jpeg, the unclamped crops were 318px and
+ * 302px wide and each contained BOTH characters' full faces, overlapping
+ * across half the page.
+ *
+ * Clamping each crop to NEIGHBOR_CLAIM_FRACTION of the gap to its horizontal
+ * neighbours keeps well clear of a neighbour's face and their outstretched
+ * limbs. Capping the resulting height to MAX_HEIGHT_TO_WIDTH x that (now
+ * possibly narrow) width, split evenly above/below the face's own vertical
+ * centre, keeps the crop's proportions in the range the recipe is proven on
+ * instead of an extreme portrait sliver. This exact split (centred, not
+ * biased toward more headroom) is the one CONFIRMED end-to-end on MC_1.jpeg —
+ * both characters swapped successfully first try. A later attempt to bias
+ * more room above the face (to fix an unrelated feather-seam cosmetic issue,
+ * see cropOverlay) changed what nano-banana/the swap model actually received
+ * and swap reliability regressed — reverted. Any future change to this split
+ * needs its own full repaint+swap re-verification, not just a visual check;
+ * fix cosmetic seam issues in cropOverlay instead, which only touches how the
+ * finished result is blended back in and can never affect what gets sent to
+ * the API. Horizontal clamp only: detectPageCharacters sorts left-to-right
+ * and book pages place characters side by side, so a vertical neighbour
+ * clamp would be untested generality.
+ */
+export function characterCrop(face: FaceBox, faces: FaceBox[], width: number, height: number): FaceBox {
+  const crop = cropBox(face, width, height, REPAINT_CROP_PADDING_X, REPAINT_CROP_PADDING_Y);
+  const faceRight = face.left + face.width;
+  let left = crop.left;
+  let right = crop.left + crop.width;
+
+  for (const other of faces) {
+    if (other === face) continue;
+    const otherRight = other.left + other.width;
+    if (otherRight <= face.left) {
+      const gap = face.left - otherRight;
+      left = Math.max(left, Math.round(face.left - gap * NEIGHBOR_CLAIM_FRACTION)); // neighbour to the left
+    } else if (other.left >= faceRight) {
+      const gap = other.left - faceRight;
+      right = Math.min(right, Math.round(faceRight + gap * NEIGHBOR_CLAIM_FRACTION)); // neighbour to the right
+    }
+  }
+  const cropWidth = Math.max(1, right - left);
+
+  let top = crop.top;
+  let bottom = crop.top + crop.height;
+  const maxHeight = cropWidth * MAX_HEIGHT_TO_WIDTH;
+  if (bottom - top > maxHeight) {
+    const faceCenterY = face.top + face.height / 2;
+    top = Math.max(0, Math.round(faceCenterY - maxHeight / 2));
+    bottom = Math.min(height, Math.round(faceCenterY + maxHeight / 2));
+  }
+
+  return { left, top, width: cropWidth, height: Math.max(1, bottom - top) };
+}
+
 // A page may have more crop/repaint calls in flight than PAGE_CONCURRENCY
 // pages are already running — cap per-page character concurrency too so a
 // pathological many-character page can't spike total in-flight Replicate calls.
@@ -352,28 +574,67 @@ const CHARACTER_CONCURRENCY = 3;
  * Feathers a finished (repainted) crop back onto its rectangular slot: full
  * opacity in the middle, fading to transparent within a margin of each edge.
  * Wider than the old face-only ellipse the swap-only pipeline used, because
- * repaint changes hair/skin over the whole crop, not just the face — this is
- * the one genuinely new, unverified piece of the multi-character path.
- * UNVERIFIED: confirm there's no visible seam/tone-shift against a real
- * multi-character page before trusting this for production.
+ * repaint changes hair/skin over the whole crop, not just the face.
+ *
+ * `fit: "cover"` (scale to fill, centre-cropping the overhang), not "fill":
+ * nano-banana doesn't preserve the input crop's aspect ratio (a 185x232,
+ * ratio-0.80 input crop came back a flat 1024x1024 square on MC_1.jpeg).
+ * "fill" would stretch/squish that mismatch to force an exact fit, warping
+ * proportions and shifting the head off the position the crop was measured
+ * for. "cover" keeps proportions correct and, since nano-banana keeps the
+ * face roughly centred in its own output, keeps the centre-cropped face
+ * aligned with where the slot expects it.
+ *
+ * The top margin is much smaller than the other three sides. The crop's top
+ * edge sits well above the character's face (headroom for hair — see
+ * characterCrop), but repaint redraws hair a different colour/volume than the
+ * original illustration's, so the original and repainted hair silhouettes
+ * don't occupy the same pixels near that edge. A 15%-margin fade there blends
+ * partially-transparent ORIGINAL content with partially-transparent REPAINTED
+ * content across the whole band — confirmed as a visible ghost/double-exposure
+ * halo above the character's head on MC_1.jpeg. A near-hard cut (small fixed
+ * margin) avoids the blend entirely: outside the crop is the unchanged
+ * original background, inside is fully the repainted character, and the seam
+ * itself sits in what is, in every case observed so far, plain background.
+ *
+ * The SAME tight margin applies to left/right, not just top: characterCrop's
+ * neighbour clamp pulls the crop in close on whichever side faces another
+ * character, so that character's own face and hands end up close to that
+ * edge too — on MC_1.jpeg the man's crop is clamped tight against the boy's
+ * side, and his face/raised hand sat inside the wide 15% left-margin fade,
+ * showing the identical ghost/double-edge next to his face and waving arm.
+ * Only the bottom margin stays generous: it fades into torso/clothing, which
+ * repaint leaves unchanged (REPAINT_PROMPT), so there's no silhouette
+ * mismatch to blend there and a wide, smooth fade is safe.
+ *
+ * NOT changed: crop geometry (characterCrop) — that governs what nano-banana
+ * and the swap model actually receive, already reverified end-to-end; this
+ * function only touches how the finished result is blended into the page, so
+ * it's free to iterate on without any risk to swap reliability.
  */
 async function cropOverlay(finishedCrop: Buffer, crop: FaceBox): Promise<sharp.OverlayOptions> {
-  const normalized = await sharp(finishedCrop).resize(crop.width, crop.height, { fit: "fill" }).ensureAlpha().toBuffer();
+  const normalized = await sharp(finishedCrop)
+    .resize(crop.width, crop.height, { fit: "cover", position: "centre" })
+    .ensureAlpha()
+    .toBuffer();
 
-  const marginX = Math.max(4, Math.round(crop.width * 0.15));
-  const marginY = Math.max(4, Math.round(crop.height * 0.15));
-  const edgeFade = (pos: number, size: number, margin: number) => {
-    if (pos < margin) return pos / margin;
-    if (pos > size - margin) return (size - pos) / margin;
+  const marginTight = (size: number) => Math.max(4, Math.round(size * 0.04));
+  const marginLeft = marginTight(crop.width);
+  const marginRight = marginTight(crop.width);
+  const marginTop = marginTight(crop.height);
+  const marginBottom = Math.max(4, Math.round(crop.height * 0.15));
+  const edgeFade = (pos: number, size: number, marginStart: number, marginEnd: number) => {
+    if (pos < marginStart) return pos / marginStart;
+    if (pos > size - marginEnd) return (size - pos) / marginEnd;
     return 1;
   };
 
   const rgba = Buffer.alloc(crop.width * crop.height * 4);
   const { data: src, info } = await sharp(normalized).raw().toBuffer({ resolveWithObject: true });
   for (let y = 0; y < crop.height; y += 1) {
-    const fy = edgeFade(y, crop.height, marginY);
+    const fy = edgeFade(y, crop.height, marginTop, marginBottom);
     for (let x = 0; x < crop.width; x += 1) {
-      const fx = edgeFade(x, crop.width, marginX);
+      const fx = edgeFade(x, crop.width, marginLeft, marginRight);
       const si = (y * crop.width + x) * info.channels;
       const di = (y * crop.width + x) * 4;
       rgba[di] = src[si] ?? 0;
@@ -395,8 +656,12 @@ async function cropOverlay(finishedCrop: Buffer, crop: FaceBox): Promise<sharp.O
  * More than one: each drawn character gets its own generous crop, repainted
  * and swapped individually against their own photo (so every child keeps the
  * fully-proven single-child prompt/recipe), then the finished crops are
- * feathered back onto the original page background. UNVERIFIED against a real
- * multi-character page — see cropOverlay's seam-risk note.
+ * feathered back onto the original page background. VERIFIED end-to-end on
+ * MC_1.jpeg and MC_2.jpeg (2026-07-18) — see characterCrop and cropOverlay
+ * for the crop-geometry and compositing fixes that got it there, and
+ * swapIdentity's noFaceRetries doc for the one still-open reliability risk
+ * (not a bug in this function — a specific child photo's swap success rate
+ * against the third-party face-swap model).
  */
 export async function personalizePage(
   page: BookPage,
@@ -405,7 +670,7 @@ export async function personalizePage(
 ): Promise<Buffer> {
   const original = await readFile(page.imagePath);
 
-  const drawnFaces = await detectPageCharacters(original);
+  const drawnFaces = await detectPageCharacters(original, page.expectedCharacterCount);
   if (drawnFaces.length === 0) {
     throw new PersonalizeError(`No character face detected on page "${page.id}".`);
   }
@@ -431,8 +696,9 @@ export async function personalizePage(
   const width = meta.width ?? 0;
   const height = meta.height ?? 0;
 
+  const allFaces = assignments.map((a) => a.face);
   const overlays = await mapWithConcurrency(assignments, CHARACTER_CONCURRENCY, async ({ face, character }) => {
-    const crop = cropBox(face, width, height, REPAINT_CROP_PADDING_X, REPAINT_CROP_PADDING_Y);
+    const crop = characterCrop(face, allFaces, width, height);
     const cropBuffer = await sharp(original).extract(crop).png().toBuffer();
     const finished = await personalizeBuffer(cropBuffer, character.photoUrl, opts);
     return cropOverlay(finished, crop);

@@ -139,8 +139,17 @@ function sameFace(a: FaceBox, b: FaceBox): boolean {
  * runs several overlapping windows and merges whatever any of them find,
  * deduping faces caught by more than one window. All passes are local CPU
  * work (no API cost).
+ *
+ * `expectedCount`, when given, caps the result at the top-N highest-scoring
+ * candidates — a defence against the same multi-window search occasionally
+ * finding an extra, lower-confidence false positive (see the comment above
+ * `kept` below). Omit it for pages where the drawn face count genuinely
+ * isn't known in advance, or where `slots` intentionally selects a subset of
+ * a page that draws more characters than are in the cast — that's a
+ * different case from a false positive and this option must not be used to
+ * paper over it.
  */
-export async function detectPageCharacters(pageBuffer: Buffer): Promise<FaceBox[]> {
+export async function detectPageCharacters(pageBuffer: Buffer, expectedCount?: number): Promise<FaceBox[]> {
   const meta = await sharp(pageBuffer).metadata();
   const width = meta.width ?? 0;
   const height = meta.height ?? 0;
@@ -175,7 +184,21 @@ export async function detectPageCharacters(pageBuffer: Buffer): Promise<FaceBox[
     merged.push(candidate.box);
   }
 
-  return merged.sort((a, b) => a.left - b.left);
+  // `merged` is still in the descending-score order `candidates` was built in
+  // (dedup only ever drops entries, never reorders), so when the caller knows
+  // exactly how many characters are drawn, keeping only the top `expectedCount`
+  // by score — before the final left-to-right sort — drops the lowest-
+  // confidence extras instead of silently including them. Needed for real
+  // false positives: on one template, one of the four detection windows
+  // scored a rocket ship's window 0.874 as a face (plausible-looking
+  // landmarks — a geometric sanity check doesn't catch it), lower than both
+  // real characters (0.94, 0.92) but well above PAGE_FACE_CONFIDENCE_THRESHOLD.
+  // Left unfiltered, that 3rd box sorts into the middle position by x and
+  // silently steals a slot from the real character next to it (assignment in
+  // personalizePage is positional, left-to-right).
+  const kept = expectedCount !== undefined && merged.length > expectedCount ? merged.slice(0, expectedCount) : merged;
+
+  return kept.sort((a, b) => a.left - b.left);
 }
 
 // Generic padded crop around a detected face. `paddingX`/`paddingY` are
