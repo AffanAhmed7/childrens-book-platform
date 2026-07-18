@@ -28,6 +28,22 @@ credit — see Troubleshooting.
 
 Node 20+ required (`node -v`).
 
+### You need to supply your own photos
+
+`assets/test-photos/` is **intentionally empty in git** — it held photos of a real
+child, and consent-sensitive images do not belong in a repository. Nothing is
+broken; you just need to bring your own.
+
+Put two photos there before testing (any names — these are only used by the CLI
+examples in section 7):
+
+- one **child** photo → used for single-character scenes, and as the LEFT
+  character in multi-character pages
+- one **adult** photo → used as the RIGHT character in multi-character pages
+
+Best results: front-facing, well lit, one clear face, no sunglasses. The web UI
+takes photos straight from your computer, so it needs nothing in this folder.
+
 ---
 
 ## 2. The web demo (use this in front of a client)
@@ -50,16 +66,27 @@ It works with **any** person's photo — nothing is hard-coded to a particular f
 
 ### How long it takes
 
-| Mode | Scenes | Realistic wall time |
+| Mode | Scenes | Budget for |
 |---|---|---|
-| Single character | plane, astronaut, workshop | **~3 minutes** |
-| Multi character | mc_2, mc_3 | **~2.5 minutes** |
+| Single character | plane, astronaut, workshop | **3–5 minutes** |
+| Multi character | mc_2, mc_3 | **3–4 minutes** |
 
 Scenes run in parallel (3 at a time), so total time is roughly the slowest
-scene, not the sum. The countdown in the UI uses measured averages.
+scene rather than the sum — but parallel scenes contend for the same Replicate
+account, so it scales worse than you would hope. A measured multi-character run
+took **3:00**.
 
-**That is a long silence in a meeting.** Plan for it — talk through the stages
-while it runs (see section 4), or present the pre-generated images instead.
+Two things make YOUR first run slower than any number quoted here:
+
+- **No cache.** `apps/api/.cache/` is gitignored, so a fresh clone re-generates
+  every repaint from scratch. Re-running the same photo and scene afterwards is
+  much faster and free.
+- **Cold start.** The first request loads the face-detection model.
+
+**That is a long silence in a meeting.** Do a throwaway run before the client
+arrives — it warms the cache and confirms your token works. Then either talk
+through the stages while it runs (section 4) or present the pre-generated
+images instead.
 
 ---
 
@@ -139,20 +166,24 @@ Replicate errors surface there.
 
 The same pipelines without the browser. Output lands in `apps/api/demo/output/`.
 
+Replace `<child.jpg>` / `<adult.jpg>` with your own photos (see section 1 —
+`assets/test-photos/` ships empty on purpose).
+
 ```bash
 cd apps/api
 
 # Single character — all three scenes
-npx tsx demo/personalize-scene.mts ../../assets/test-photos/kid.png
+npx tsx demo/personalize-scene.mts ../../assets/test-photos/<child.jpg>
 
 # Just one scene, with intermediate stage frames
-npx tsx demo/personalize-scene.mts <photo> --scene astronaut --debug
+npx tsx demo/personalize-scene.mts ../../assets/test-photos/<child.jpg> --scene astronaut --debug
 
-# Multi character — both pages (child photo first, then adult)
-npx tsx demo/personalize-book.mts ../../assets/test-photos/3.jpg ../../assets/test-photos/man.png
+# Multi character — both pages (child photo FIRST, then adult)
+npx tsx demo/personalize-book.mts ../../assets/test-photos/<child.jpg> ../../assets/test-photos/<adult.jpg>
 
 # Free: check face detection and crops without spending any credit
-npx tsx demo/personalize-page.mts ../../assets/templates/MC_2.jpeg <photo1> <photo2> --detect-only
+npx tsx demo/personalize-page.mts ../../assets/templates/MC_2.jpeg \
+  ../../assets/test-photos/<child.jpg> ../../assets/test-photos/<adult.jpg> --detect-only
 ```
 
 `--detect-only` costs nothing and is the right way to sanity-check a new template

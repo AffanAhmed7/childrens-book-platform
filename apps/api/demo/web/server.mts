@@ -27,9 +27,15 @@ const PORT = Number(process.env.DEMO_WEB_PORT ?? 5174);
 
 // Measured on real runs (2026-07-19), used for the countdown in the UI. Wall
 // time per scene, not per stage — see docs/DEMO_RUNBOOK.md.
+//
+// Deliberately PESSIMISTIC. The first numbers here came from sequential CLI
+// runs and under-predicted a real browser run by ~25% (predicted 2:23, took
+// 3:00) because scenes running in parallel contend for the same Replicate
+// account and some calls get queued or rate-limited. In front of a client an
+// estimate that comes in early is fine; one that overruns is not.
 const ESTIMATE_SECONDS: Record<string, number> = {
-  plane: 160, astronaut: 100, workshop: 95,
-  mc_2: 130, mc_3: 105,
+  plane: 195, astronaut: 135, workshop: 130,
+  mc_2: 185, mc_3: 155,
 };
 // Scenes run in parallel, so the wall-clock estimate is the slowest one plus a
 // little slack for the others queueing behind the concurrency limit.
