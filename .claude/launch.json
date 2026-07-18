@@ -1,0 +1,19 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "api-dev",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["run", "dev"],
+      "cwd": "apps/api",
+      "port": 3001
+    },
+    {
+      "name": "demo-web",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["run", "demo:web"],
+      "cwd": "apps/api",
+      "port": 5174
+    }
+  ]
+}
