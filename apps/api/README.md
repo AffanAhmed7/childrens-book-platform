@@ -35,7 +35,12 @@ reading before changing any of them.
 | 4 | heal | `stages/heal.ts` | free | Removes small near-white swap specks, locally |
 | 5 | eyes | `stages/eyes.ts` | free | Paints the repaint's eyes back over the swap's, locally |
 
-Roughly **$0.045 per page, per character**, and ~90–170s dominated by the repaint.
+Roughly **$0.045 per page, per character**, and ~90–170s wall time.
+
+Cost and latency live in *different* stages, which is easy to get backwards. Measured from the
+Replicate account's real prediction history: the **repaint dominates cost** ($0.039 flat) but
+is fast at ~9–12s; the **swap dominates latency** at ~55–90s. Don't optimize the repaint for
+speed or the swap for cost.
 
 **Why repaint-then-swap.** The repaint SEES the photograph, so one generic prompt personalizes
 any child with no per-child hair/skin text, and because it redraws the artwork cohesively there

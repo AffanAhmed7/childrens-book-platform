@@ -12,8 +12,19 @@ import { dataUri } from "../dataUri";
 // because it redraws the artwork cohesively there are no seams or halos. The
 // later stages only clean up after it.
 //
-// It is also the expensive stage (~$0.039/image) and the slow one (~90-170s).
-
+// COST vs LATENCY — these are different stages, which is easy to get backwards.
+// Reconstructed from the Replicate account's real prediction history: repaint is
+// the dominant COST at a flat $0.039/image (Google's own price, no Replicate
+// markup) but is FAST at ~9-12s. The swap is the dominant LATENCY at ~55-90s.
+// A whole page runs ~90-170s wall time. Don't optimize repaint for speed or the
+// swap for cost.
+//
+// nano-banana-2-lite is kept behind a flag but is NOT a usable cost lever: tried
+// once, it discarded the template scene entirely and hallucinated an unrelated
+// one instead of editing it. It is not "unverified" — it was verified and it
+// failed. No cost lever has survived scrutiny at this quality bar, other than
+// nano-banana's batch API (~50% off), which needs a 24h turnaround and so can't
+// serve a real-time flow.
 export type RepaintModel = "nano-banana" | "nano-banana-2-lite";
 
 // The single generic repaint prompt. Every clause here was added to fix a
