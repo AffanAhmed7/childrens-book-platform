@@ -5,26 +5,59 @@ Client: _private engagement_ · Engagement: Prototype build · Delivery window: 
 
 ---
 
+> ## ⚠️ HISTORICAL RECORD — NOT THE CURRENT ARCHITECTURE
+>
+> **Written 2026-07-15 as the pre-build plan. The build then pivoted twice.** Most of
+> the technical design below — the pipeline steps, the data model, the API surface, the
+> stack table — describes systems that were **built, measured, and replaced**. The files
+> it names (`portrait.ts`, `removeBg.ts`, `composite.ts`, `skinTone.ts`, `tone.ts`,
+> `faceSwap.ts`) **no longer exist in this repository.**
+>
+> **For what the system actually does today, read
+> [apps/api/README.md](apps/api/README.md).** That is the live architecture document.
+> For running a demo, read [docs/DEMO_RUNBOOK.md](docs/DEMO_RUNBOOK.md).
+>
+> This file is kept deliberately, and is still worth reading for two things:
+>
+> - **The Decision Log** below — why the architecture changed, twice, with the evidence
+>   that forced each change. Re-litigating a replaced approach costs real money.
+> - **§1, §2, §15, §16** — the original scope lock and the client-commitment mapping,
+>   which are unchanged and still binding.
+>
+> Sections whose technical content is superseded are flagged individually, so a section
+> read on its own cannot mislead. **§14 (Deliverables) has been kept current** — it is
+> the one status-bearing section in this file.
+>
+> _Accuracy pass: 2026-07-19._
+
+---
+
 ## Decision Log
 
 | Date | Decision | Effect |
 |------|----------|--------|
-| 2026-07-15 | **API-only** engagement — browser test UI **not** built this phase | `apps/web` deferred; Swagger UI at `/docs` is the interactive demo surface; a scripted `test/e2e.http` collection drives QA (§8, §10, §14) |
+| 2026-07-15 | **API-only** engagement — browser test UI **not** built this phase | `apps/web` deferred; Swagger UI at `/docs` is the interactive demo surface. *(Update: the planned `test/e2e.http` collection was never created — QA is driven by `apps/api/test/e2e-single.mjs` and `e2e-multichar.mjs` instead. A standalone browser demo UI did later ship in `apps/api/demo/`, outside the deferred `apps/web`.)* |
 | 2026-07-15 | GitHub repo: **public**, owner's account, `gh` CLI setup | See §11 |
 | 2026-07-16 | Face detection: `@tensorflow/tfjs` + `blazeface` instead of `face-api.js` | Avoids the native `canvas` package, a real build risk on Windows under this deadline; bounding boxes are sufficient for single-face validation. See `apps/api/README.md` |
-| 2026-07-16 | Portrait model: free public Hugging Face Space (`InstantX/InstantID`), not Replicate | No card/budget available. Verified end-to-end with a real photo — good watercolor-style, identity-preserving results. Trade-off: shared free GPU queue (latency ranges seconds-to-minutes), community-maintained. Replicate version preserved in git history if a paid, more reliable path is wanted later. See `apps/api/README.md` |
+| 2026-07-16 | ~~Portrait model: free public Hugging Face Space (`InstantX/InstantID`), not Replicate~~ **SUPERSEDED** | No card/budget available at the time. Trade-off: shared free GPU queue, community-maintained. **Dead — there is no portrait step any more.** The ZeroGPU daily quota (~2 min for anonymous callers) made it unworkable, and the whole generate-a-portrait design was replaced twice over; see the 2026-07-17 rows. |
 | 2026-07-16 | Pipeline job: single BullMQ job per session, `attempts: 1` (no auto-retry), not per-step retry differentiation | Per-step retry policy would need BullMQ flows (linked jobs) — more machinery than a 3-day prototype warrants; failures surface immediately via the `error` SSE event |
 | 2026-07-16 | **Scope pivot: multi-character + template-based compositing**, superseding the single-character "generate one preview" design | Client wants a small-scale proof of Imagitime's actual architecture (one stylized portrait per child, reused via fast compositing — not regenerated per page) plus **true multi-character** now, not deferred. New Session→many Character data model, per-character upload endpoints, and a new `composite` pipeline step. Full detail in the approved plan; see §17 below and `apps/api/README.md` |
-| 2026-07-17 | **Second pivot: face-swap onto finished artwork, superseding §17's generate-a-portrait-then-composite design** | The free HF Space's ZeroGPU quota (~2 min/day for anonymous callers, see §17) made repeated generation unworkable, and diffusion still fought identity/pose drift even within quota. Replaced with `codeplugtech/face-swap` (Replicate, ~$0.007/run) swapping the child's face directly onto the character the illustrator already drew and posed — no diffusion, no per-template calibration, no portrait/remove_bg/composite steps. `portrait.ts`/`removeBg.ts`/`composite.ts` deleted; see `apps/api/README.md` for the current architecture (§17 below is left as historical record of the design it replaced). Multi-character face-swap has since been run successfully end-to-end through the real API. **New, unresolved risk this pivot introduces:** inswapper is licensed for non-commercial/research use only — needs a commercial licence before this can ship as a paid product (see `faceSwap.ts`). |
+| 2026-07-17 | **Second pivot: face-swap onto finished artwork, superseding §17's generate-a-portrait-then-composite design** | The free HF Space's ZeroGPU quota (~2 min/day for anonymous callers, see §17) made repeated generation unworkable, and diffusion still fought identity/pose drift even within quota. Replaced with `codeplugtech/face-swap` (Replicate, InsightFace inswapper) swapping the child's face directly onto the character the illustrator already drew and posed — no diffusion, no per-template calibration, no portrait/remove_bg/composite steps. `portrait.ts`/`removeBg.ts`/`composite.ts` deleted. **New, unresolved risk this pivot introduces:** inswapper is licensed for non-commercial/research use only — needs a commercial licence before this can ship as a paid product. **This decision was itself superseded the same day — see the row below.** |
+| 2026-07-17 | **Third pivot (CURRENT ARCHITECTURE): repaint the whole illustration, THEN swap for identity** | Swap-alone was measured and found insufficient — it changed only **~0.43%** of a page, leaving the wrong hair, an unwanted headband and pale hands. It is an identity stage, not an engine. The pipeline became five stages: **repaint** (`google/nano-banana`, ~$0.039) redraws the whole illustration as this child, then **swap** (~$0.006) pins the likeness, then **restore**/**heal**/**eyes** clean up. The repaint *sees the photograph*, so one generic prompt personalizes any child with no per-child tuning and no per-template calibration, and because it redraws cohesively there are no seams or halos. Masked inpainting (FLUX Fill) was tried before this and rejected by the client for visible seams and a bright hair halo. **Neither replaced approach should be revisited.** Cost and latency live in different stages: repaint dominates cost, swap dominates latency (~55-90s). Full detail in `apps/api/README.md`. |
+| 2026-07-19 | **Consolidation: one engine, one catalog** | Three overlapping page registries and four demo CLI drivers were merged into a single `catalog.ts` + one `personalize.ts` entry point, so production and the demo harness provably run the same code. Skin-tone extraction was removed end to end (code, DB column, API field) — it was computed, stored, passed in, and never read. `skinTone.ts`, `faceSwap.ts` and a broken `demo/demo.mts` deleted. See `apps/api/README.md` for the resulting file map. |
 
 ---
 
 ## 0. How to read this document
 
-This is the single source of truth for the prototype build. It expands the client
-proposal into an executable engineering plan. Every item in the proposal's
-"Included in Prototype" list is mapped to a concrete task, owner, file, and
-acceptance check below.
+> **This was written as the single source of truth, and is no longer.**
+> `apps/api/README.md` holds the current architecture. What follows is the plan as it
+> stood at kickoff, retained as a record of intent and of what the client was promised.
+
+It expands the client proposal into an executable engineering plan. Every item in the
+proposal's "Included in Prototype" list is mapped to a concrete task, owner, file, and
+acceptance check below — and §14 records how each one actually landed, including the
+several that were delivered by a different mechanism than planned.
 
 - **Section 1–2** — scope lock (what we build, what we explicitly do not)
 - **Section 3–8** — the technical design (stack, architecture, data, pipeline, API, frontend)
@@ -41,8 +74,17 @@ acceptance check below.
 
 ## 1. Scope — Included in Prototype
 
-The prototype is a single end-to-end loop for **one child character, one story, one
-preview image**:
+> **Capability list still binding; the mechanism below is superseded.** The numbered
+> capabilities are what the client was promised and §14 tracks each one. The pipeline
+> arrow-diagram directly below describes the *original* design — background removal,
+> portrait generation and skin-tone extraction no longer exist. Scope also grew on
+> 2026-07-16 from one character to **true multi-character** (§17).
+>
+> **What actually runs today:** `upload → face validation → repaint → swap → restore →
+> heal → eyes → live SSE status → preview page(s)`.
+
+The prototype was originally scoped as a single end-to-end loop for **one child
+character, one story, one preview image**:
 
 > upload → face validation → background removal → portrait generation → skin-tone
 > extraction → compositing → live SSE status → one preview image → test UI + API docs
@@ -62,10 +104,14 @@ preview image**:
 
 ## 2. Scope — Explicitly OUT (do not build)
 
-Multi-character · multi-page preview · cart/checkout (Stripe) · 300 DPI CMYK print PDF ·
-print-provider integration (Gelato/Lulu) · admin dashboard · GDPR deletion workflow +
-audit log · auth/accounts · transactional email (Resend) · full i18n rollout beyond the
-single test locale.
+> **⚠️ ONE ITEM MOVED IN.** ~~Multi-character~~ was **pulled into scope on 2026-07-16** at
+> the client's request and is **built** — 2+ real children on one page, each detected and
+> personalized independently (§17). Everything else in this list is still out.
+
+~~Multi-character~~ (**now in scope and delivered**) · multi-page preview · cart/checkout
+(Stripe) · 300 DPI CMYK print PDF · print-provider integration (Gelato/Lulu) · admin
+dashboard · GDPR deletion workflow + audit log · auth/accounts · transactional email
+(Resend) · full i18n rollout beyond the single test locale.
 
 These are tracked in **Section 16** so the client sees they are deliberately deferred,
 not forgotten.
@@ -73,6 +119,23 @@ not forgotten.
 ---
 
 ## 3. Tech Stack (locked)
+
+> **⚠️ SUPERSEDED IN PART.** Runtime, language, framework, database, ORM, queue, storage
+> and SSE are all accurate. The image-pipeline rows are not. Corrections:
+>
+> | Row | Planned | Actually built |
+> |---|---|---|
+> | Face detection | face-api.js → Rekognition fallback | **`@tensorflow/tfjs` + blazeface** (local, free) |
+> | Background removal | remove.bg API | **removed** — no such step exists |
+> | Skin-tone extraction | Sharp pixel sampling | **removed 2026-07-19** — computed but never read |
+> | Portrait generation | Replicate ControlNet/IP-Adapter/InstantID | **removed** — replaced by repaint-then-swap |
+> | Compositing | Sharp template + portrait | **replaced** by feathered crop overlay for multi-character pages only |
+> | *(new)* Repaint | — | **`google/nano-banana`** ~$0.039 |
+> | *(new)* Swap | — | **InsightFace inswapper** ~$0.006 |
+> | *(new)* Restore | — | **CodeFormer** |
+>
+> The "no stack deviations" line below is therefore **no longer true** — it was true on
+> the day it was written.
 
 | Layer | Choice | Notes |
 |-------|--------|-------|
@@ -98,6 +161,13 @@ Node 20; we pin `engines.node` to `>=20` and target 20 LTS behavior.
 ---
 
 ## 4. Architecture Overview
+
+> **⚠️ SUPERSEDED.** The transport shape (presigned R2 upload, Fastify, BullMQ worker,
+> Redis pub/sub, SSE, Prisma/Postgres) is still exactly right. The **worker steps in the
+> diagram are wrong** — `remove_bg → skin_tone → portrait → composite` no longer exist.
+> Today the worker runs `validate` per character, then a single `render` step covering
+> repaint → swap → restore → heal → eyes. The Next.js UI shown is deferred and unbuilt.
+> Current diagram and flow: [apps/api/README.md](apps/api/README.md).
 
 ```
 ┌────────────┐   presigned PUT    ┌──────────────┐
@@ -147,6 +217,19 @@ Node 20; we pin `engines.node` to `>=20` and target 20 LTS behavior.
 
 ## 5. Data Model (Prisma — prototype-scoped)
 
+> **⚠️ SUPERSEDED.** Three migrations have changed this. The live schema is
+> `apps/api/prisma/schema.prisma`; the differences that matter:
+>
+> - `Session` has **many** `Character` (was 1:1), and `childName` moved onto `Character`.
+> - `Character` gained `slot` (e.g. `child_1`), unique per session.
+> - `noBgKey`, `portraitKey` and `skinToneHex` were **dropped** (migrations
+>   `remove_dead_portrait_fields`, `remove_dead_skin_tone`) — the steps that wrote them
+>   no longer exist.
+> - Finished pages are not a DB column; they live at a derived R2 key
+>   (`sessions/{id}/pages/{pageId}.png`).
+> - `packages/shared` was **never populated** — the status vocabulary lives in
+>   `apps/api/src/pipeline/types.ts` and the SSE copy in `apps/api/src/messages.ts`.
+
 ```prisma
 model Session {
   id        String   @id @default(uuid())
@@ -179,8 +262,19 @@ UI never drift.
 
 ## 6. Pipeline (BullMQ)
 
-**One queue** (`pipeline`), **one job per session** running five sequential steps. Multi-queue
-with dead-letter routing is a Phase-2 concern — out of scope here.
+> **⚠️ SUPERSEDED.** One queue, one job per session is still correct. The **step table
+> below is not** — four of its five steps no longer exist. Today: `validate` runs per
+> character in parallel (blazeface, local, free), then one `render` step renders every
+> page for the mode, up to `PAGE_CONCURRENCY` (default 3) pages in flight, each page
+> running repaint → swap → restore → heal → eyes per drawn character.
+>
+> Two other corrections: retries are **`attempts: 1`** (not 2 with backoff — see the
+> 2026-07-16 decision log row; retries happen at the HTTP level inside a call instead),
+> and there are **two** user-facing copy strings, not five, because the five image
+> stages are reported to the user as one `render` step.
+
+**One queue** (`pipeline`), **one job per session**. Multi-queue with dead-letter routing
+is a Phase-2 concern — out of scope here.
 
 | Step | Action | Writes | Emits (SSE `status`) |
 |------|--------|--------|----------------------|
@@ -202,6 +296,24 @@ Rules:
 ---
 
 ## 7. Backend API Surface
+
+> **⚠️ SUPERSEDED.** The upload endpoints are now per-character, and two endpoints below
+> (`/preview`, the single-character `/upload-url`) do not exist. The live surface is
+> generated from route schemas and browsable at `/docs`; it is tabulated in
+> [apps/api/README.md](apps/api/README.md#endpoints). In short:
+>
+> ```
+> POST /api/sessions                                              { storyId, characters: [{slot, childName}] }
+> GET  /api/sessions/:id
+> POST /api/sessions/:id/characters/:characterId/upload-url
+> POST /api/sessions/:id/characters/:characterId/upload-confirm   enqueues once ALL characters have uploaded
+> POST /api/sessions/:id/render-full                              renders the rest of the book
+> GET  /api/sessions/:id/pages                                    per-page status + signed URLs
+> GET  /api/sessions/:id/status                                   SSE
+> ```
+>
+> The object-key namespacing note below is also stale: keys are
+> `sessions/{id}/pages/{pageId}.png`, with no `/nobg` or `/portrait`.
 
 ```
 POST /api/sessions
@@ -242,13 +354,21 @@ OpenAPI is generated automatically from route schemas via `@fastify/swagger` +
 > browser test UI is **deferred to a later phase**. The demo and QA surface for this build is:
 >
 > - **Swagger UI at `/docs`** — interactive, click-to-run documentation of every endpoint.
-> - **`test/e2e.http`** — a checked-in REST Client collection that walks the full
->   create → upload → confirm → status(SSE) → preview loop against a running API.
-> - **`test/e2e.mjs`** — a small Node script for an automated end-to-end pass in CI/QA,
->   including an `EventSource` consumer that prints each SSE `status` event and the final
->   `done`/`error`.
+> - **`test/e2e.http`** — a checked-in REST Client collection.
+> - **`test/e2e.mjs`** — a small Node script for an automated end-to-end pass.
 >
 > The reference UI design below is retained for the future phase when the browser UI is added.
+
+> **⚠️ CORRECTION.** Neither `test/e2e.http` nor `test/e2e.mjs` was ever created. The
+> actual QA scripts in `apps/api/test/` are `e2e-single.mjs`, `e2e-multichar.mjs`,
+> `list-past-runs.mjs` and `download-run-images.mjs`.
+>
+> Separately, a **standalone browser demo UI did ship** — `apps/api/demo/web`, run with
+> `npm run demo:web`. It is not the deferred `apps/web` Next.js UI described below: it is
+> a self-contained Fastify page that calls the same pipeline functions the production
+> worker calls, with no Postgres, Redis, BullMQ or S3 dependency, so a client demo cannot
+> be taken down by infrastructure unrelated to what is being shown. See
+> [docs/DEMO_RUNBOOK.md](docs/DEMO_RUNBOOK.md).
 
 ### (Reference — deferred) Next.js test UI, single page
 
@@ -268,6 +388,16 @@ while a pipeline is in flight; graceful error card on the `error` SSE event.
 ---
 
 ## 9. Infrastructure & Secrets Provisioning
+
+> **⚠️ PARTLY SUPERSEDED.** The provisioning steps and the who-creates-what principle
+> still stand. But **`REMOVEBG_API_KEY` and `REPLICATE_MODEL_VERSION` are not used** —
+> remove.bg was designed out, and models are pinned in code rather than by env var. A
+> remove.bg account is **not** needed.
+>
+> The `.env` contract below is also out of date and lives in the wrong place: the real
+> one is **`apps/api/.env.example`** (not the repo root), and it is authoritative.
+> Note that the **demo harness needs only `REPLICATE_API_TOKEN`** — no database, Redis
+> or storage — which is the fastest way to see the engine work.
 
 All chosen services have free tiers. **Account creation requires the client's/owner's own
 sign-in** — I will not create third-party accounts or enter credentials on your behalf. For
@@ -304,6 +434,10 @@ is tracked. On the hosts, secrets are set as environment variables in the dashbo
 ---
 
 ## 10. Build Schedule — Compressed to 3 Days
+
+> **Historical.** This schedule was executed, then overtaken by the two pivots in the
+> decision log; Day 2's "risk step" (portrait generation) no longer exists as a step.
+> Delivery status is tracked in §14, not here.
 
 The proposal budgets 5–7 working days; we're targeting **3**. This is achievable only if the
 client assets (Section 15) arrive at kickoff. The plan front-loads the risk step
@@ -362,6 +496,19 @@ client assets (Section 15) arrive at kickoff. The plan front-loads the risk step
 
 ## 12. Testing & Acceptance Criteria (Definition of Done)
 
+> **⚠️ SUPERSEDED.** The principle — done means it passes on a **real** photo — held
+> throughout and still does. The table's rows for background removal, skin tone,
+> portrait and compositing test steps that no longer exist, and it names the two scripts
+> that were never written (see §8). The planned unit tests for skin-tone sampling and
+> compositing geometry were not written either; skin-tone sampling was deleted, and
+> compositing geometry is verified instead by the free `--detect-only` preflight, which
+> writes the exact crops the models would receive.
+>
+> **What "done" means today, and what has actually been verified, is the "Known state"
+> section of [apps/api/README.md](apps/api/README.md)** — including the open risks and
+> the caveat that most results rest on one or two runs against a non-deterministic
+> pipeline.
+
 A capability is "done" only when its acceptance check passes on a **real** photo.
 
 | Capability | Acceptance check |
@@ -386,6 +533,24 @@ compositing geometry).
 
 ## 13. Risk Register & Fallback Plan
 
+> **⚠️ SUPERSEDED — and the original register no longer contains the top risk.**
+> The kickoff register below is retained as a record of what was anticipated. Every row
+> in it is now either resolved or obsolete: the flagged portrait-quality risk was
+> resolved by designing portrait generation out entirely, and the face-api.js and
+> remove.bg rows describe dependencies that were never adopted or were removed.
+>
+> **The live register, in priority order:**
+>
+> | # | Risk | Impact | Status |
+> |---|---|---|---|
+> | 1 | **Licensing.** InsightFace **inswapper** — the swap model — is published for non-commercial/research use only. InsightFace sell a separate commercial licence. Most open face-swap tools (roop, facefusion, SimSwap) derive from it and inherit the restriction. | **Blocks selling, not building.** | **OPEN, unmitigated.** Deliberately deferred to finish the prototype first. Needs raising with the client **before** launch, not at it. |
+> | 2 | **Single-character page art is not shippable.** `astronaut`, `plane` and `workshop` are screenshots of a competitor's preview flow with French UI chrome baked into the pixels. | Demos fine; cannot ship. | OPEN. Needs real illustration. New art must be **soft-shaded/painterly** — the swap model's face detector reliably fails on flat vector and chibi art. |
+> | 3 | **Non-determinism, undersampled.** Each verified result rests on one or two runs, and the same photo and page will not reproduce a previous output. | Past "confirmed" fixes have hidden real bugs this way. | OPEN. Anything reliability-related needs **N≥5** runs before it is settled. |
+> | 4 | **`render-full` never exercised** through the real API. | Unknown-unknowns in the buy-the-book path. | OPEN. |
+> | 5 | **Not deployed.** Still local-only; no shareable demo URL. | §14's one unchecked deliverable. | OPEN. |
+
+### (Historical) Kickoff risk register
+
 | Risk | Likelihood | Impact | Mitigation |
 |------|-----------|--------|-----------|
 | **Portrait quality below bar** (off-the-shelf model, no fine-tune) — *the flagged risk* | Med–High | High | Front-loaded to Day 2. Try 2–3 alternate Replicate models (IP-Adapter, InstantID, PhotoMaker) before declaring blocked. Document exact failure mode (likeness loss / style mismatch / artifacts). Ship best result labeled pre-fine-tuning; scope fine-tuning precisely. |
@@ -400,33 +565,58 @@ compositing geometry).
 
 ## 14. Deliverables Checklist (mapped to proposal)
 
-Updated 2026-07-17 to reflect the face-swap pivot (see Decision Log) — several original items
-were superseded by a different mechanism rather than left undone; noted explicitly below.
+**This is the one status-bearing section of this document and is kept current.**
+Last reconciled against the code **2026-07-19**. Several original items were delivered by a
+different mechanism than planned rather than left undone; each is marked.
 
 - [x] Photo upload (presigned, direct-to-R2) — verified via real sessions
-- [x] Face validation (single face + resolution/type) — `validate.ts`, verified
-- [x] ~~Background removal (remove.bg)~~ — **superseded**: the face-swap architecture swaps
-      directly onto the drawn character's existing background, so this step doesn't exist
-      anymore. `removeBg.ts` deleted.
-- [x] Skin-tone extraction (Sharp) — `skinTone.ts`, verified; feeds an optional tone-matching
-      pass (`tone.ts`) that's implemented but still off by default (not yet validated with tone
-      enabled end-to-end)
+- [x] Face validation (single face + resolution/type) — `validate.ts`, verified. Uses
+      **blazeface**, not the planned face-api.js.
+- [x] ~~Background removal (remove.bg)~~ — **superseded, no longer applicable**: the engine
+      repaints the illustrator's finished artwork in place, so there is no background to
+      remove. `removeBg.ts` deleted.
+- [ ] ~~Skin-tone extraction (Sharp)~~ — **superseded and removed 2026-07-19.** It was built
+      and it worked, but it was computed, stored, passed in and **never read** by any stage,
+      so it was deleted end to end (`skinTone.ts`, the `skinToneHex` column, the API field).
+      Skin tone still carries into the result — the repaint sees the photograph directly and
+      matches it, including on hands and body, which is what this item was for.
 - [x] ~~Portrait / illustrated-character generation (Replicate, off-the-shelf)~~ —
-      **superseded**: no portrait is generated; the child's face is swapped directly onto the
-      illustrator's existing drawn character. `portrait.ts` deleted.
-- [x] ~~Compositing onto scene template (Sharp)~~ — **superseded** by the swap's own feathered
-      -mask overlay (`personalize.ts`'s `faceOverlay`); `composite.ts` deleted.
-- [x] Live SSE status with the specified copy — verified via real sessions
-- [x] One final preview image — verified (multi-character page rendered correctly end-to-end)
-- [x] ~~Browser test UI~~ — **deferred** (client confirmed API-only, 2026-07-15); Swagger UI at `/docs` + `test/e2e-multichar.mjs` serve as the demo/QA surface
+      **superseded**: no separate portrait is generated. The page artwork itself is repainted
+      as the child (`google/nano-banana`), then identity-locked with a face swap.
+      `portrait.ts` deleted.
+- [x] ~~Compositing character onto a scene template (Sharp)~~ — **superseded**: solo pages
+      need no compositing at all (the whole page is repainted). Multi-character pages crop
+      each drawn character, personalize each independently, and feather the finished crops
+      back on — `compose.ts` (`characterCrop` / `cropOverlay`). `composite.ts` deleted.
+- [x] Live SSE status with the specified copy — verified via real sessions. **Two steps
+      (`validate`, `render`), not five** — the five image stages are deliberately reported to
+      the user as one step.
+- [x] One final preview image — verified end-to-end, single- and multi-character
+- [x] ~~Browser test UI~~ — **deferred** (client confirmed API-only, 2026-07-15). Swagger UI
+      at `/docs` plus `test/e2e-single.mjs` / `test/e2e-multichar.mjs` are the API demo/QA
+      surface. **A standalone browser demo UI was nonetheless built** and is the recommended
+      client-facing surface: `apps/api/demo/web`, `npm run demo:web`.
 - [x] Documented API (OpenAPI at `/docs`) — primary interface
-- [ ] Deployed prototype (API) with a shareable Swagger `/docs` demo URL — still local-only, not hosted
+- [ ] **Deployed prototype (API) with a shareable Swagger `/docs` demo URL — still
+      local-only, not hosted.** The only outstanding deliverable.
 - [x] GitHub repo with timely, meaningful commit history
-- [x] This plan + README + architecture/API/risk docs — README rewritten 2026-07-17 to match the current architecture
+- [x] This plan + README + architecture/API/risk docs — `apps/api/README.md` is the live
+      architecture document; this plan was marked as a historical record on 2026-07-19.
+
+**Scope delivered beyond the original list:** true multi-character pages (2+ real children on
+one page, each detected and personalized independently), a five-page catalog across two books,
+preview-vs-full render modes as a cost lever, and a free `--detect-only` preflight.
 
 ---
 
 ## 15. What I Need From You (kickoff blockers)
+
+> **Historical — these were the kickoff asks and are resolved.** Item 3 was answered
+> (API-only) and item 6 was answered (see decision log). Two remain live, but as
+> **product** blockers rather than kickoff blockers, and they are tracked as risks 1–2
+> in §13: real illustration to replace the competitor screenshots, and a commercial
+> licence for the swap model. Item 1's "transparent placeholder region" is no longer how
+> the engine works — it repaints finished artwork rather than compositing into a hole.
 
 From the proposal's "What I need from you," due **as early as possible** to protect the 3-day
 timeline:
@@ -456,6 +646,29 @@ named Phase-2+ item, not an omission.
 ---
 
 ## 17. Multi-Character Pivot (2026-07-16)
+
+> **⚠️ HALF SUPERSEDED — read the split carefully, this section is easy to misread.**
+>
+> **Still true and still binding:** the scope change. True multi-character (2+ real
+> children in one scene) was pulled forward as a hard requirement, `Session` gained many
+> `Character`, and the per-character API endpoints described here are the ones that
+> exist today.
+>
+> **Superseded:** everything about *how* it was to be built. The "Architecture" paragraph
+> below (generate one portrait per child, then cheaply composite it onto a fixed template
+> face slot) was replaced the following day — see the 2026-07-17 decision log rows. There
+> is no portrait step, no fixed face slot, and no hardcoded template geometry; face
+> positions are detected per page at run time. The `two-children-park.png` template
+> discussed below **does not exist in the repo**, and `composite.ts` is deleted.
+>
+> **Do not act on the instruction at the end of this section** to wait for a Hugging Face
+> quota reset and re-run — that pipeline no longer exists. To verify multi-character
+> today: `npm run personalize -- <child> <adult> --page mc_2` (or `--detect-only` first,
+> which is free).
+>
+> The ZeroGPU quota post-mortem is kept because its two incidental fixes are still in the
+> code and still matter: the unhandled `ioredis` error that crashed the server, and
+> worker steps logging their full cause rather than only a generic SSE message.
 
 Mid-build, the client sent reference material (screenshots of the Imagitime competitor app —
 see decision log) revealing the real target architecture, and asked for two changes to the
@@ -530,4 +743,6 @@ expected to succeed cleanly based on every component's individual verification.
 ---
 
 *Owner: Affan Ahmed · Prototype engagement (client confidential) · This document is versioned
-in the repo and updated as the build progresses.*
+in the repo. It is now a **historical record** of the plan and how it changed; §14 is the one
+section kept current. The live architecture document is
+[apps/api/README.md](apps/api/README.md).*
