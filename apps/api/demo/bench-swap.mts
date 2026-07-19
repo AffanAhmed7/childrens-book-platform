@@ -43,9 +43,13 @@ if (!photoPath) {
 
 const backend = env.SWAP_BACKEND;
 
-if (backend === "replicate" && runs > 1 && !allowPaid) {
+// `auto` can ALSO spend money — it falls back to hosted the instant the local
+// service is unreachable or errors, silently, which is exactly the case this
+// guard exists to catch. Only `local` (strict) is unconditionally free.
+if (backend !== "local" && runs > 1 && !allowPaid) {
+  const why = backend === "auto" ? "falls back to hosted on any local failure, which" : "";
   console.error(
-    `\nSWAP_BACKEND=replicate — each run is a PAID prediction (~$0.006, ~55-90s).\n` +
+    `\nSWAP_BACKEND=${backend} — ${why ? why + " " : ""}each run may be a PAID prediction (~$0.006, ~55-90s).\n` +
       `Refusing ${runs} paid runs. Either:\n` +
       `  - set SWAP_BACKEND=local in apps/api/.env (free, and the point of this exercise), or\n` +
       `  - pass --allow-paid if you really want ${runs} hosted runs.\n`,

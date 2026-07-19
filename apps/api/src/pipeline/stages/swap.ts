@@ -10,6 +10,10 @@ import { env } from "../../env";
 //
 //   replicate (default) — the hosted codeplugtech/face-swap model.
 //   local               — services/faceswap, the same inswapper model self-hosted.
+//                         Errors if the service is down (strict; for testing).
+//   auto                — try local first, fall back to hosted on ANY local
+//                         failure. Fast when the box is healthy, slow-but-working
+//                         when it isn't. The production-resilient setting.
 //
 // WHY LOCAL EXISTS: the hosted call bills ~$0.006 at Replicate's CPU rate of
 // $0.0001/s, i.e. ~60 SECONDS of billed CPU, for a model whose real inference is
@@ -106,24 +110,48 @@ async function swapViaReplicate(targetBuf: Buffer, photoUri: string): Promise<Bu
   return fetchToBuffer(url);
 }
 
-/** Replace the repainted face with the child's actual face. */
-export async function swapIdentity(targetBuf: Buffer, photoUri: string): Promise<Buffer> {
-  if (env.SWAP_BACKEND !== "local") return swapViaReplicate(targetBuf, photoUri);
-
-  // The local backend retries here instead of inside the client, because a local
-  // retry is ~1s and free — the hosted one costs a paid prediction and ~60s,
-  // which is why that budget is bounded and lives deeper in the stack.
+/**
+ * Local swap with its own retry loop. Retries here rather than inside the client
+ * because a local retry is ~3.5s and free — the hosted one costs a paid
+ * prediction and ~60s, which is why that budget is bounded and lives deeper in
+ * the stack. Throws on exhaustion (a NoFaceError) or a hard failure (unreachable,
+ * 5xx) — the caller decides whether that's fatal or a reason to fall back.
+ */
+async function swapViaLocalWithRetries(targetBuf: Buffer, photoUri: string): Promise<Buffer> {
   for (let attempt = 0; ; attempt += 1) {
     try {
       return await swapViaLocal(targetBuf, photoUri);
     } catch (err) {
-      if (!(err instanceof NoFaceError) || attempt >= NO_FACE_RETRIES) {
-        if (err instanceof NoFaceError) throw new ReplicateError(err.message);
-        throw err;
+      if (err instanceof NoFaceError && attempt < NO_FACE_RETRIES) {
+        console.error(
+          `[swap:local] detector reported no face (attempt ${attempt + 1}/${NO_FACE_RETRIES + 1}) — retrying`,
+        );
+        continue;
       }
-      console.error(
-        `[swap:local] detector reported no face (attempt ${attempt + 1}/${NO_FACE_RETRIES + 1}) — retrying`,
-      );
+      throw err;
     }
+  }
+}
+
+/** Replace the repainted face with the child's actual face. */
+export async function swapIdentity(targetBuf: Buffer, photoUri: string): Promise<Buffer> {
+  const backend = env.SWAP_BACKEND;
+  if (backend === "replicate") return swapViaReplicate(targetBuf, photoUri);
+
+  try {
+    return await swapViaLocalWithRetries(targetBuf, photoUri);
+  } catch (err) {
+    // `auto`: a healthy local box is the fast path, but any local failure —
+    // service down, 5xx, or no-face after local retries — falls back to the
+    // hosted model rather than failing the render. Logged loudly so a silently
+    // degraded box (every swap quietly paying full hosted price) is visible in
+    // the logs instead of just looking slow.
+    if (backend === "auto") {
+      console.error(`[swap] local backend failed — falling back to hosted. Cause: ${(err as Error).message}`);
+      return swapViaReplicate(targetBuf, photoUri);
+    }
+    // `local` (strict): surface a no-face as the friendly message, else the raw error.
+    if (err instanceof NoFaceError) throw new ReplicateError(err.message);
+    throw err;
   }
 }

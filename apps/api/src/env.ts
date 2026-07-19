@@ -18,11 +18,18 @@ export const env = {
   CORS_ORIGIN: readOptional("CORS_ORIGIN") ?? "http://localhost:3000",
   PORT: Number(readOptional("PORT") ?? "3001"),
 
-  // Which backend runs the swap stage. `local` points at services/faceswap,
-  // which runs the same inswapper model with the weights resident instead of
-  // reloaded per call (~55-90s -> ~3.5s measured). Defaults to `replicate` so a
-  // checkout without the local service running behaves exactly as before.
-  SWAP_BACKEND: readOptional("SWAP_BACKEND") === "local" ? "local" : "replicate",
+  // Which backend runs the swap stage:
+  //   replicate (default) — hosted only. A checkout without the local service
+  //                         running behaves exactly as before.
+  //   local               — local only (services/faceswap). Errors if the
+  //                         service is down. For testing the local path alone.
+  //   auto                — try local first, fall back to hosted on any failure.
+  //                         The production-resilient mode: fast when the box is
+  //                         healthy, degrades to slow-but-working when it isn't.
+  SWAP_BACKEND: (() => {
+    const v = readOptional("SWAP_BACKEND");
+    return v === "local" || v === "auto" ? v : "replicate";
+  })(),
   SWAP_LOCAL_URL: readOptional("SWAP_LOCAL_URL") ?? "http://127.0.0.1:5175",
 };
 
