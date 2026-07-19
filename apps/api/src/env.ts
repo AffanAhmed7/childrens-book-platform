@@ -17,6 +17,13 @@ export const env = {
   REPLICATE_API_TOKEN: readOptional("REPLICATE_API_TOKEN"),
   CORS_ORIGIN: readOptional("CORS_ORIGIN") ?? "http://localhost:3000",
   PORT: Number(readOptional("PORT") ?? "3001"),
+
+  // Which backend runs the swap stage. `local` points at services/faceswap,
+  // which runs the same inswapper model with the weights resident instead of
+  // reloaded per call (~55-90s -> ~3.5s measured). Defaults to `replicate` so a
+  // checkout without the local service running behaves exactly as before.
+  SWAP_BACKEND: readOptional("SWAP_BACKEND") === "local" ? "local" : "replicate",
+  SWAP_LOCAL_URL: readOptional("SWAP_LOCAL_URL") ?? "http://127.0.0.1:5175",
 };
 
 const DAY1_REQUIRED_KEYS = [

@@ -45,6 +45,9 @@ childrens-book-platform/
 │   └── web/             # (DEFERRED, empty) Next.js test UI — API-only engagement
 ├── packages/
 │   └── shared/          # (EMPTY placeholder — never populated; see its README)
+├── services/
+│   └── faceswap/        # self-hosted swap stage — same model, ~50x faster than
+│                        #   the hosted call (which bills 60s of CPU cold start)
 ├── infra/               # deployment notes (nothing is deployed yet)
 └── assets/
     ├── templates/       # page artwork — 2 illustrator pages + 3 competitor screenshots

@@ -42,6 +42,33 @@ Replicate account's real prediction history: the **repaint dominates cost** ($0.
 is fast at ~9–12s; the **swap dominates latency** at ~55–90s. Don't optimize the repaint for
 speed or the swap for cost.
 
+### The swap's 60 seconds are cold start, not inference
+
+Worth understanding before optimizing anything: the hosted swap bills ~$0.006 at Replicate's
+CPU rate of $0.0001/s — which is **~60 seconds of billed CPU** for a model whose real
+inference is under a second. It is not queue wait. Every call reloads the buffalo_l analysis
+pack plus `inswapper_128.onnx` (several hundred MB) from disk, runs one image, and discards it.
+
+So the stage is self-hostable at a large discount. `services/faceswap` runs the same model
+with the weights resident:
+
+| | hosted | self-hosted (CPU) |
+|---|---|---|
+| swap stage | 55–90s | ~3.5s (measured) |
+| **page total** | **90–170s** | **~15–25s** |
+
+Switch with `SWAP_BACKEND=local` (default `replicate`, so a checkout without the service
+running is unaffected). It needs weights that are not in this repo — see
+[services/faceswap/README.md](../../services/faceswap/README.md). Measure it with
+`npm run bench:swap`.
+
+This is what makes the *full book* viable rather than just faster: 24 pages is
+`24 × ~120s ÷ 3 concurrent ≈ 16 minutes` hosted, versus well under a minute self-hosted with
+room to raise concurrency.
+
+**It does not change the licensing position** — self-hosting inswapper is still a licensed use
+of a non-commercial model, arguably more clearly so. See "Known state" below.
+
 **Why repaint-then-swap.** The repaint SEES the photograph, so one generic prompt personalizes
 any child with no per-child hair/skin text, and because it redraws the artwork cohesively there
 are no seams or halos. The swap alone is not enough — measured, it changed only ~0.43% of a

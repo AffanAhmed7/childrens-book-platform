@@ -88,6 +88,19 @@ arrives — it warms the cache and confirms your token works. Then either talk
 through the stages while it runs (section 4) or present the pre-generated
 images instead.
 
+### Making it much faster
+
+Most of that wait is one stage. The hosted face-swap bills ~60 seconds of CPU
+per call, almost all of it cold-start model loading rather than actual work.
+Running that stage locally instead (`SWAP_BACKEND=local`, see
+[`services/faceswap/`](../services/faceswap/README.md)) takes a page from
+~90–170s to roughly ~15–25s, which turns the demo from "talk for three minutes"
+into something you can watch finish.
+
+It needs a one-time setup and model weights that are not in this repo, so it is
+not the default. If you have it running, a live demo becomes the strong move
+rather than the risky one.
+
 ---
 
 ## 3. The safety net — pre-generated images
