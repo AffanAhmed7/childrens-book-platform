@@ -6,17 +6,19 @@ import { publishStatus } from "./status-events";
 import { STEP_MESSAGES } from "./messages";
 import type { CharacterInput, PipelineStep } from "./pipeline/types";
 import { validatePhoto } from "./pipeline/validate";
-import { extractSkinTone } from "./pipeline/skinTone";
-import { childPhotoUrl } from "./pipeline/faceSwap";
-import { personalizePage } from "./pipeline/scene";
-import { getBook, pagesFor, pageObjectKey, type BookPage } from "./pipeline/templates";
+import { personalizePage } from "./pipeline/personalize";
+import { getBook, pagesFor, pageObjectKey, type Page } from "./pipeline/catalog";
 import { mapWithConcurrency } from "./pipeline/pool";
 import { createDownloadUrl, putObject, objectExists } from "./storage";
 
-// How many pages are personalized at once. Each page may itself issue one swap
-// per character, so the real ceiling on in-flight API calls is this times the
-// number of children.
+// How many pages are personalized at once. Each page may itself issue one
+// repaint+swap per character, so the real ceiling on in-flight API calls is this
+// times the number of children.
 const PAGE_CONCURRENCY = Number(process.env.PAGE_CONCURRENCY ?? "3");
+
+// Replicate fetches the child's photo itself, so it gets a signed link rather
+// than the bytes. Long-lived enough to cover a whole book's pages.
+const PHOTO_URL_TTL_SECONDS = 3600;
 
 async function runStep<T>(
   sessionId: string,
@@ -54,7 +56,7 @@ async function processJob(job: Job<PipelineJobData>): Promise<void> {
     throw new Error(`Session ${sessionId} has no characters.`);
   }
 
-  // Per-child prep. Photos are independent, so validate/sample them together.
+  // Per-child prep. Photos are independent, so validate them together.
   const characters: CharacterInput[] = await Promise.all(
     characterRows.map(async (character) => {
       if (!character.rawKey) {
@@ -62,29 +64,19 @@ async function processJob(job: Job<PipelineJobData>): Promise<void> {
       }
       const rawKey = character.rawKey;
 
-      // Local face detection — no API cost — and it also confirms the photo is
-      // usable before we spend anything on swaps.
-      const validation = await runStep(sessionId, "validate", character.slot, () => validatePhoto(rawKey));
-
-      // Cached across runs (the "full" run after a preview reuses it).
-      let skinToneHex = character.skinToneHex;
-      if (!skinToneHex) {
-        skinToneHex = await runStep(sessionId, "skin_tone", character.slot, () =>
-          extractSkinTone(rawKey, validation.faceBox),
-        );
-        await prisma.character.update({ where: { id: character.id }, data: { skinToneHex } });
-      }
+      // Local face detection — no API cost — and it confirms the photo is usable
+      // before we spend anything on rendering.
+      await runStep(sessionId, "validate", character.slot, () => validatePhoto(rawKey));
 
       return {
         slot: character.slot,
-        photoUrl: await childPhotoUrl(rawKey),
-        skinToneHex,
+        photoUrl: await createDownloadUrl(rawKey, PHOTO_URL_TTL_SECONDS),
       } satisfies CharacterInput;
     }),
   );
 
-  await runStep(sessionId, "swap", undefined, () =>
-    mapWithConcurrency(pages, PAGE_CONCURRENCY, async (page: BookPage) => {
+  await runStep(sessionId, "render", undefined, () =>
+    mapWithConcurrency(pages, PAGE_CONCURRENCY, async (page: Page) => {
       const key = pageObjectKey(sessionId, page.id);
       // Never pay twice for the same page: a retried job, or a "full" run after
       // a preview, reuses whatever is already rendered.
@@ -104,7 +96,7 @@ async function processJob(job: Job<PipelineJobData>): Promise<void> {
     data: { status: "done", previewKey },
   });
 
-  const previewUrl = await createDownloadUrl(previewKey, 3600);
+  const previewUrl = await createDownloadUrl(previewKey, PHOTO_URL_TTL_SECONDS);
   await publishStatus(sessionId, { type: "done", previewUrl });
 }
 

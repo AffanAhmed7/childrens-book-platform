@@ -64,7 +64,7 @@ async function main() {
     console.log(`  status: ${session.status}   book: ${session.storyId}   created: ${session.createdAt.toISOString()}`);
 
     for (const c of session.characters) {
-      console.log(`\n  Child "${c.childName}" (slot: ${c.slot})   skin tone: ${c.skinToneHex ?? "—"}`);
+      console.log(`\n  Child "${c.childName}" (slot: ${c.slot})`);
       console.log(`    photo: ${c.rawKey ? await linkFor(c.rawKey) : "— not uploaded —"}`);
     }
 

@@ -1,30 +1,90 @@
-# apps/api — Fastify backend
+# apps/api — Fastify backend + the personalization engine
 
-TypeScript + Fastify service that owns multi-character sessions, presigned R2 uploads, the
-BullMQ pipeline worker, the SSE status stream, and the OpenAPI docs.
-
-**Status:** face-swap architecture (see [PROJECT_PLAN.md §17](../../PROJECT_PLAN.md) for the
-pivot history from the original generate-then-composite design). Multi-character face-swap has
-been run successfully end-to-end through the real API — see "Known state" below for exactly
-what's verified and what isn't yet.
+TypeScript service that owns multi-character sessions, presigned R2 uploads, the BullMQ
+pipeline worker, the SSE status stream, the OpenAPI docs — and the image engine itself.
 
 ## Setup
 
 ```bash
 cd apps/api
-cp .env.example .env      # fill in the keys below — see PROJECT_PLAN.md §9
+cp .env.example .env      # fill in the keys below
 npm install
 npx prisma migrate deploy
 npm run dev                # http://localhost:3001, docs at /docs
 ```
 
-Required: `DATABASE_URL`, `R2_*` (upload loop); `REDIS_URL` (must be `rediss://`, TLS —
-Upstash rejects plain `redis://`) and `REPLICATE_API_TOKEN` (the pipeline itself — face
-detection is local/free, the swap call is the only paid step).
+Required: `DATABASE_URL`, `R2_*` (the upload loop); `REDIS_URL` (must be `rediss://`, TLS —
+Upstash rejects plain `redis://`) and `REPLICATE_API_TOKEN` (the engine — face detection is
+local and free; the repaint, swap and restore calls are the paid steps).
 
-Without a given key set, the server still boots (so you can browse `/docs`) — the specific
-routes/steps that need it fail clearly instead (a 500, a 503 on `/status`, or a skipped
+Without a given key set the server still boots, so `/docs` stays browsable; the specific
+routes and steps that need it fail clearly instead (a 500, a 503 on `/status`, or a skipped
 enqueue with a logged warning) rather than crashing the process.
+
+## How the engine works
+
+One recipe, five stages, in `src/pipeline/`. Every stage exists because something specific
+failed without it — each stage file documents what was tried and rejected, which is worth
+reading before changing any of them.
+
+| # | Stage | File | Cost | What it does |
+|---|-------|------|------|--------------|
+| 1 | repaint | `stages/repaint.ts` | ~$0.039 | Redraws the whole illustration as this child (`google/nano-banana`) |
+| 2 | swap | `stages/swap.ts` | ~$0.006 | Pins the likeness to exactly this child (InsightFace inswapper) |
+| 3 | restore | `stages/restore.ts` | small | Blends the swap back into the painterly art (CodeFormer) |
+| 4 | heal | `stages/heal.ts` | free | Removes small near-white swap specks, locally |
+| 5 | eyes | `stages/eyes.ts` | free | Paints the repaint's eyes back over the swap's, locally |
+
+Roughly **$0.045 per page, per character**, and ~90–170s dominated by the repaint.
+
+**Why repaint-then-swap.** The repaint SEES the photograph, so one generic prompt personalizes
+any child with no per-child hair/skin text, and because it redraws the artwork cohesively there
+are no seams or halos. The swap alone is not enough — measured, it changed only ~0.43% of a
+page, leaving the wrong hair, an unwanted headband and pale hands. It is the identity stage,
+not the engine.
+
+**Two approaches were tried and rejected.** Masked inpainting (FLUX Fill) to preserve the
+illustrator's exact pixels left visible seams and a bright halo around the hair on
+open-background pages; the client rejected it outright. Before that, generating a portrait and
+compositing it in fought pose and identity drift and needed per-template hand-calibration for
+every page. Neither should be revisited — see [PROJECT_PLAN.md](../../PROJECT_PLAN.md) for the
+full history.
+
+### Page routing
+
+`personalize.ts` is the only entry point. It routes on how many characters a page draws:
+
+- **Solo pages** repaint the whole page in one call. No detection, no cropping, no
+  compositing — the simplest path and the most proven.
+- **Multi-character pages** give each drawn character their own generous crop, personalize each
+  one individually against their own photo (so every child gets the solo recipe), then feather
+  the finished crops back onto the original page. The crop geometry and the blending are in
+  `compose.ts` and both took real measurement to get right.
+
+Faces map to character slots **left to right** unless a page overrides that with `slots`. A
+drawn character with no child mapped to them is left exactly as the illustrator drew them.
+
+### File map
+
+```
+src/pipeline/
+  catalog.ts      the ONE registry of pages and books — add a page here, nowhere else
+  personalize.ts  the engine entry point; routes solo vs. multi-character
+  compose.ts      multi-character crop geometry + feathered compositing
+  faceDetect.ts   local blazeface detection (free)
+  validate.ts     photo validation for uploads
+  replicate.ts    Replicate client (prediction polling, "No face found" retries)
+  retry.ts        HTTP retry policy (network, 5xx, 429)
+  pool.ts         bounded-concurrency map
+  dataUri.ts      Buffer → data URI
+  types.ts        shared types
+  stages/         the five stages above, one file each
+```
+
+`compose.ts` has an important split: `characterCrop` decides **what the models receive** and any
+change to it needs full repaint+swap re-verification, while `cropOverlay` only decides **how the
+finished result is blended back** and cannot affect reliability. Fix cosmetic seam problems in
+`cropOverlay`, never in `characterCrop`.
 
 ## Endpoints
 
@@ -33,95 +93,87 @@ enqueue with a logged warning) rather than crashing the process.
 | GET | `/health` | liveness check |
 | GET | `/docs` | Swagger UI (OpenAPI) |
 | POST | `/api/sessions` | create a session with one or more characters (`storyId`, `characters: [{slot, childName}]`) |
-| GET | `/api/sessions/:id` | inspect a session + all its characters (QA convenience, not in original spec) |
+| GET | `/api/sessions/:id` | inspect a session and its characters |
 | POST | `/api/sessions/:id/characters/:characterId/upload-url` | presigned R2 PUT URL for that character's photo |
-| POST | `/api/sessions/:id/characters/:characterId/upload-confirm` | record the upload; enqueues the pipeline (mode `"preview"`) once *every* character in the session has uploaded |
-| POST | `/api/sessions/:id/render-full` | enqueues the rest of the book (mode `"full"`) — pages already rendered for the preview are reused, not re-paid for |
-| GET | `/api/sessions/:id/pages` | lists every page in the book with its render status and signed URL if ready |
+| POST | `/api/sessions/:id/characters/:characterId/upload-confirm` | record the upload; enqueues the pipeline (mode `"preview"`) once *every* character has uploaded |
+| POST | `/api/sessions/:id/render-full` | enqueues the rest of the book (mode `"full"`); pages already rendered for the preview are reused, not re-paid for |
+| GET | `/api/sessions/:id/pages` | every page in the book with render status and a signed URL if ready |
 | GET | `/api/sessions/:id/status` | **SSE** — live progress per character/step, plus the final `done`/`error` event |
 
-`test/e2e.http` and `test/e2e-day2.mjs` predate the multi-character pivot and don't match the
-current API shape. Live scripts:
+## Production job flow
+
+One BullMQ job per session, mode `"preview"` (only pages flagged `preview: true` in
+`catalog.ts`) or `"full"` (the whole book, reusing anything already rendered). Preview mode is
+the main cost lever — most visitors never buy, so we don't pay to render their whole book.
+
+Per **character**, in parallel: `validate` (exactly one face, blazeface confidence ≥ 0.9, and
+at least 200×200 — local, free, and it confirms the photo is usable before anything is spent).
+Once every character is ready, one `render` step renders every page for that mode, up to
+`PAGE_CONCURRENCY` (default 3) pages in flight. Each page may itself issue the full stage chain
+per drawn character.
+
+A page already in R2, from a prior preview or a retried attempt, is skipped rather than
+re-paid for. Any step failure sets `status = failed` and emits an SSE `error` event with a
+user-facing message; the full error is always logged server-side, even when the SSE message is
+generic.
+
+Jobs use `attempts: 1` — no automatic BullMQ retry, so a failure surfaces immediately. Retries
+happen at the HTTP level inside a call (`retry.ts`) and for the swap model's own false-negative
+face detection (`replicate.ts`'s `noFaceRetries`).
+
+## Demo harness
+
+`demo/` runs the identical engine with no Postgres, Redis, BullMQ or S3 — so a client demo
+can't be taken down by infrastructure that has nothing to do with what's being shown.
+
+```bash
+npm run demo:web                          # browser UI on :5174, live per-stage progress
+npm run personalize -- kid.jpg            # CLI, every page
+npm run personalize -- kid.jpg dad.png --page mc_2
+npm run personalize -- kid.jpg dad.png --detect-only   # FREE preflight, no API calls
+```
+
+`--detect-only` runs only local detection and writes the crops that *would* be sent for
+repainting. Always run it before paid work when crop geometry has changed.
+
+See [docs/DEMO_RUNBOOK.md](../../docs/DEMO_RUNBOOK.md) for the full client-demo procedure.
+
+Test scripts against the real API:
 - `test/e2e-single.mjs <photo> [childName]` — one character, preview pages only.
-- `test/e2e-multichar.mjs <storyId> <photo> <slot> <name> [<photo> <slot> <name> ...]` — N characters.
-- `demo/demo.mts` — narrated walkthrough of one page, for a screen recording (`--open` shows each step's image).
+- `test/e2e-multichar.mjs <storyId> <photo> <slot> <name> [...]` — N characters.
+- `test/list-past-runs.mjs` — inspect previous sessions and their rendered pages.
 
-## Pipeline
+## Known state
 
-One BullMQ job per session, mode `"preview"` (just the pages flagged `preview: true` in
-`templates.ts`) or `"full"` (the whole book, reusing any page already rendered). Per
-**character**, in parallel: `validate → skin_tone`. Once every character is ready, one `swap`
-step renders every page for that mode, up to `PAGE_CONCURRENCY` (default 3) pages in flight —
-each page may itself issue one swap call per drawn character on it, in parallel.
+**Verified end-to-end through the real API:** a full multi-character session — create → upload
+two different children's photos → confirm → SSE through `validate`/`render` → `done` —
+producing correct per-character results on both a solo and a two-character page. The browser
+demo UI has been verified the same way from a fresh clone.
 
-1. **validate** (`validate.ts`) — exactly one face detected in the raw upload (blazeface,
-   confidence ≥ 0.9) + minimum resolution (200×200).
-2. **skin_tone** (`skinTone.ts`) — sampled from a cheek/chin band inside the detected face box
-   (narrower than the full box, to avoid hair/eyes/shadow pulling the average toward grey),
-   cached on the `Character` row so a later "full" render doesn't re-sample.
-3. **swap** *(per page, per drawn character on it)* — `personalize.ts` detects every drawn
-   character on the page (`faceDetect.ts`, blazeface — see "multi-character detection" below),
-   crops a padded region around each one, sends it to Replicate's face-swap model
-   (`faceSwap.ts`) with the child's photo as the source face, and pastes the swapped crop back
-   through a feathered elliptical mask (`personalize.ts`'s `faceOverlay`) so only the face
-   changes, not the surrounding art. Pages are rendered up to `PAGE_CONCURRENCY` at a time
-   (`pool.ts`); a page already in R2 (from a prior preview/attempt) is skipped, not re-paid for.
-4. **tone matching** *(optional, off by default — see `ToneSettings` in `templates.ts`)* —
-   `tone.ts`'s colour-distance recolouring shifts the drawn character's skin/hair toward the
-   child's own tone, sampled from the child's photo and from the page's *original* (pre-swap)
-   artwork. Pure pixel maths, no extra API cost. Off by default because it's a partial/soft
-   nudge by design (preserves the illustrator's shading rather than flat-filling) and hasn't
-   been validated end-to-end with tone actually enabled — see "Known state."
+**Open risks, in priority order:**
 
-Any step failure sets `status = failed` and emits an SSE `error` event (with the `slot` it
-happened on, if applicable) with a user-facing message; the full error is always logged
-server-side (`worker.ts`'s `runStep`) even when the SSE message is generic.
+1. **Licensing.** The swap model (InsightFace inswapper) is published for non-commercial and
+   research use only. InsightFace sell a separate commercial licence, which this paid product
+   needs before launch. Most open face-swap tools (roop, facefusion, SimSwap) derive from the
+   same model and inherit the restriction. **This blocks selling, not building.**
+2. **The single-character page art is not shippable.** `astronaut`, `plane` and `workshop` are
+   screenshots of a competitor's preview flow with French UI chrome baked into the pixels
+   (which is what the `crop` field in `catalog.ts` strips). They demonstrate the engine fine,
+   but they need replacing with real illustration.
+3. **Non-determinism, undersampled.** Each verified result rests on one or two runs, and the
+   same photo and page will not reproduce a previous output. Past "confirmed" fixes have hidden
+   real bugs exactly this way. Anything reliability-related needs N≥5 runs before it is settled.
+4. **`render-full`** (rendering the rest of the book after a preview) has not been exercised
+   through the real API.
 
-### Notable implementation choices
+**Template art must be soft-shaded/painterly, not flat vector or chibi.** The swap model's own
+internal face detector — separate from our blazeface check — reliably fails on flat-colour,
+thick-outline art and on chibi proportions (giant anime eyes, round blob head), reporting
+`status: "succeeded"` with no output and only "No face found" in the logs. The repaint prompt
+now forces realistic facial geometry to counter this, but brief any new template art
+accordingly before investing in it.
 
-- **Engine: face-swap onto finished artwork, not generate-then-composite.** Replaces an
-  earlier architecture that generated a stylized portrait per child (via a paid or free
-  diffusion model) and pasted it into a template. That approach fought diffusion drift
-  (identity, pose) and needed per-template calibration. Swapping the child's face onto a
-  character the illustrator already drew and posed needs none of that — pose, lighting, hair
-  and headgear are correct by construction. See `faceSwap.ts` and
-  [PROJECT_PLAN.md §17](../../PROJECT_PLAN.md) for the full history.
-- **Model: `codeplugtech/face-swap` (InsightFace inswapper) on Replicate**, ~$0.007/run, CPU,
-  seconds. **Licensing is unresolved:** inswapper is published for non-commercial/research use;
-  InsightFace sell a separate commercial licence, which this paid product needs before launch.
-- **Face detection:** `@tensorflow/tfjs` (pure JS/WASM) + `blazeface` instead of `face-api.js`,
-  which needs the native `canvas` package — a real build risk on Windows. Shared by
-  `validate.ts` (exactly-one-face check on a raw photo) and `personalize.ts`
-  (`detectPageCharacters`, finding every drawn character on a page) via `faceDetect.ts`.
-- **Multi-character detection on a page:** a single whole-page blazeface pass is enough for a
-  solo-character page, but misses one of two children standing side by side in a wide frame,
-  and is sensitive to the *exact* crop width in a non-systematic way. `detectPageCharacters`
-  runs several overlapping crop windows and merges/dedupes whatever any of them find.
-- **Template art must be a soft-shaded/painterly style, not flat vector/cartoon.** The swap
-  model's own internal face detector (separate from our blazeface check) reliably fails to
-  find a face in flat-colour/thick-outline illustration, regardless of face size or pose — it
-  reports `status: "succeeded"` with no output, visible only in `prediction.logs` as "No face
-  found." Confirmed on the original `two-children-park.png` (replaced by
-  `two-children-park-v2.png`, generated to match `workshop`'s working painterly style). Brief
-  any future template art (or generation prompt) accordingly before investing in it.
-- **Job retries:** single job per session, `attempts: 1` (no automatic BullMQ retry) — a
-  failure surfaces immediately via the `error` SSE event. Within a single swap call,
-  `retry.ts`'s `fetchWithRetry` retries network errors, 5xx, and 429 (rate-limited) with
-  backoff honouring `Retry-After` when present — 4xx other than 429 is not retried, since the
-  request itself is wrong and retrying won't help.
-
-## Known state / what's verified vs. not
-
-**Verified, through the real API (not just direct-call scripts):** a full multi-character
-session — create → upload 2 different children's photos → confirm → SSE through
-`validate`/`skin_tone`/`swap` → `done` — completed cleanly and produced correct per-character
-face swaps on both a single-character and a two-character page.
-
-**Not yet verified:**
-- `render-full` (rendering the rest of the book after the preview) has not been run even once.
-- Tone matching (`tone.skin`/`tone.hair`) has only been checked with synthetic target colours
-  on local assets, never through the real session flow with `tone` enabled.
-- Only two of the book's five pages (`workshop`, `park`) have template art confirmed compatible
-  with the swap model. The other three (`astronaut`, `pilot`, `architect`) were found to be
-  screenshots of a reference competitor app with foreign UI baked into the image pixels, not
-  usable template art at all — they need replacing, not just a compatibility check.
+**Do not try to fix child facial geometry with prompt text.** It has failed three times over —
+hair length, doubled eyebrows, and eye size. Even a concrete "each eye is one fifth of the face
+width" instruction did not shrink a child's eyes, though the adult character on the same page
+complied. Eye size is fixed downstream in `stages/eyes.ts` instead.

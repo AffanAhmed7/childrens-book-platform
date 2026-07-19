@@ -136,7 +136,7 @@ Be aware of these; don't volunteer them, but don't be caught out either.
 - **Don't zoom into hands** on workshop; they read slightly paler than the face.
 - **Eye colour on multi pages** comes from the illustration, not the photo. The
   likeness carries through face shape, skin tone and hair. This is a deliberate
-  trade — see `restoreEyeRegion` in `src/pipeline/scene.ts`.
+  trade — see `restoreEyeRegion` in `src/pipeline/stages/eyes.ts`.
 - **Every run is non-deterministic.** The same photo and scene will not reproduce
   a previous result. If you get a good one, save it immediately.
 - **Photos work best** front-facing, well-lit, one clear face. Sunglasses, heavy
@@ -169,22 +169,27 @@ The same pipelines without the browser. Output lands in `apps/api/demo/output/`.
 Replace `<child.jpg>` / `<adult.jpg>` with your own photos (see section 1 —
 `assets/test-photos/` ships empty on purpose).
 
+One command drives everything — `--page` picks which page(s), and the page's own
+character count decides whether it needs one photo or two.
+
 ```bash
 cd apps/api
 
-# Single character — all three scenes
-npx tsx demo/personalize-scene.mts ../../assets/test-photos/<child.jpg>
+# Every page
+npm run personalize -- ../../assets/test-photos/<child.jpg>
 
-# Just one scene, with intermediate stage frames
-npx tsx demo/personalize-scene.mts ../../assets/test-photos/<child.jpg> --scene astronaut --debug
+# One page, with intermediate stage frames
+npm run personalize -- ../../assets/test-photos/<child.jpg> --page astronaut --debug
 
-# Multi character — both pages (child photo FIRST, then adult)
-npx tsx demo/personalize-book.mts ../../assets/test-photos/<child.jpg> ../../assets/test-photos/<adult.jpg>
+# A two-character page (child photo FIRST, then adult — left to right)
+npm run personalize -- ../../assets/test-photos/<child.jpg> ../../assets/test-photos/<adult.jpg> --page mc_2
 
 # Free: check face detection and crops without spending any credit
-npx tsx demo/personalize-page.mts ../../assets/templates/MC_2.jpeg \
-  ../../assets/test-photos/<child.jpg> ../../assets/test-photos/<adult.jpg> --detect-only
+npm run personalize -- ../../assets/test-photos/<child.jpg> ../../assets/test-photos/<adult.jpg> --page mc_2 --detect-only
 ```
+
+Page ids are `astronaut`, `plane`, `workshop` (one child) and `mc_2`, `mc_3`
+(two children), or `all`. They are defined in `apps/api/src/pipeline/catalog.ts`.
 
 `--detect-only` costs nothing and is the right way to sanity-check a new template
 before spending money on it.

@@ -3,8 +3,11 @@ import * as tf from "@tensorflow/tfjs";
 import * as blazeface from "@tensorflow-models/blazeface";
 import type { FaceBox } from "./types";
 
-// Shared by validate.ts (exactly-one-face check on a raw photo) and
-// composite.ts (locating the face within a generated portrait to crop it).
+// Local face detection — no API cost, so it is free to run as often as needed.
+// Used by validate.ts (exactly-one-face check on a parent's upload), by
+// personalize.ts (finding the drawn characters on a page), and by the heal and
+// eyes stages (locating the personalized face in a finished render).
+//
 // Uses @tensorflow/tfjs (pure JS/WASM, CPU backend) + blazeface instead of
 // face-api.js, which requires the native `canvas` package — a risky native
 // build dependency on Windows under a tight deadline.

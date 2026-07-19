@@ -1,15 +1,16 @@
-// Multi-character end-to-end check for the face-swap pipeline: creates a session
-// with N children, uploads a different photo for each, watches the SSE stream,
-// then lists the rendered pages.
+// Multi-character end-to-end check: creates a session with N children, uploads a
+// different photo for each, watches the SSE stream, then lists the rendered
+// pages.
 //
-// Each child gets swapped onto their own drawn character on every page. The
+// Each child is personalized onto their own drawn character on every page. The
 // mapping is left-to-right by default: the leftmost drawn character on a page
-// becomes the first slot. A page can override that with `slots` in templates.ts.
+// becomes the first slot. A page can override that with `slots` in
+// src/pipeline/catalog.ts.
 //
 // Usage:
 //   node test/e2e-multichar.mjs <storyId> <photo1> <slot1> <name1> [<photo2> <slot2> <name2> ...]
 // e.g.
-//   node test/e2e-multichar.mjs demo-book ./a.jpg child_1 Ada ./b.jpg child_2 Bo
+//   node test/e2e-multichar.mjs demo-book-duo ./a.jpg child_1 Ada ./b.jpg child_2 Bo
 //
 // Requires the API server running (npm run dev) with REDIS_URL, R2 and
 // REPLICATE_API_TOKEN configured. Note this renders the PREVIEW pages only;

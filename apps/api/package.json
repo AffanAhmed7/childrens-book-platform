@@ -9,8 +9,7 @@
   "scripts": {
     "dev": "tsx watch src/index.ts",
     "start": "tsx src/index.ts",
-    "personalize": "tsx demo/personalize-scene.mts",
-    "personalize:book": "tsx demo/personalize-book.mts",
+    "personalize": "tsx demo/personalize.mts",
     "demo:web": "tsx demo/web/server.mts",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "prisma:generate": "prisma generate",

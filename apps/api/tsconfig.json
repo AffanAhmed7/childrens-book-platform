@@ -4,8 +4,7 @@
     "module": "ESNext",
     "moduleResolution": "Bundler",
     "lib": ["ES2022"],
-    "outDir": "dist",
-    "rootDir": "src",
+    "noEmit": true,
     "strict": true,
     "esModuleInterop": true,
     "skipLibCheck": true,
@@ -13,5 +12,15 @@
     "forceConsistentCasingInFileNames": true,
     "noUncheckedIndexedAccess": true
   },
-  "include": ["src"]
+  // `demo` is included deliberately. It used to be left out, and a demo script
+  // rotted undetected — it imported two symbols that no longer existed and would
+  // have crashed on first run, but nothing ever typechecked it. Everything that
+  // imports from src now gets checked against src.
+  //
+  // noEmit because nothing compiles this: dev, start and the demo all run
+  // straight off tsx.
+  "include": ["src", "demo"],
+  // Generated run output, gitignored and overwritten in place. Any scratch
+  // script that lands there is not part of the codebase.
+  "exclude": ["demo/output"]
 }

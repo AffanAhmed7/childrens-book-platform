@@ -6,7 +6,7 @@ import { env } from "../env";
 import { createUploadUrl, createDownloadUrl, rawObjectKey, objectExists } from "../storage";
 import { getPipelineQueue } from "../queue";
 import { subscribeStatus } from "../status-events";
-import { getBook, pageObjectKey } from "../pipeline/templates";
+import { getBook, bookPages, pageObjectKey } from "../pipeline/catalog";
 
 const ErrorResponse = Type.Object({ message: Type.String() });
 
@@ -54,7 +54,6 @@ const CharacterView = Type.Object({
   slot: Type.String(),
   childName: Type.String(),
   rawKey: Type.Union([Type.String(), Type.Null()]),
-  skinToneHex: Type.Union([Type.String(), Type.Null()]),
 });
 const RenderFullResponse = Type.Object({
   ok: Type.Literal(true),
@@ -271,7 +270,7 @@ export async function registerSessionRoutes(app: FastifyInstance) {
       // Pages live at a predictable key, so what's ready is derived from storage
       // rather than tracked separately in the database.
       const pages = await Promise.all(
-        book.pages.map(async (page) => {
+        bookPages(book).map(async (page) => {
           const key = pageObjectKey(id, page.id);
           const ready = await objectExists(key);
           return {

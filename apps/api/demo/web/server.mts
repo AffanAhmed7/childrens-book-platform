@@ -16,33 +16,28 @@ import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import Fastify from "fastify";
-import { SCENES, MULTI_SCENES } from "../../src/pipeline/scenes";
-import { personalizeScene, personalizePage } from "../../src/pipeline/scene";
+import { PAGES, getPage, characterCount } from "../../src/pipeline/catalog";
+import { personalizePage } from "../../src/pipeline/personalize";
 import { mapWithConcurrency } from "../../src/pipeline/pool";
-import type { BookPage } from "../../src/pipeline/templates";
 import type { CharacterInput } from "../../src/pipeline/types";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const PORT = Number(process.env.DEMO_WEB_PORT ?? 5174);
 
-// Measured on real runs (2026-07-19), used for the countdown in the UI. Wall
-// time per scene, not per stage — see docs/DEMO_RUNBOOK.md.
-//
-// Deliberately PESSIMISTIC. The first numbers here came from sequential CLI
-// runs and under-predicted a real browser run by ~25% (predicted 2:23, took
-// 3:00) because scenes running in parallel contend for the same Replicate
-// account and some calls get queued or rate-limited. In front of a client an
-// estimate that comes in early is fine; one that overruns is not.
-const ESTIMATE_SECONDS: Record<string, number> = {
-  plane: 195, astronaut: 135, workshop: 130,
-  mc_2: 185, mc_3: 155,
-};
-// Scenes run in parallel, so the wall-clock estimate is the slowest one plus a
+// The UI offers two modes, which is just a split of the catalog by how many
+// characters a page draws: "single" needs one photo, "multi" needs two.
+const soloPages = Object.values(PAGES).filter((p) => characterCount(p) === 1);
+const duoPages = Object.values(PAGES).filter((p) => characterCount(p) > 1);
+
+const DEFAULT_ESTIMATE_SECONDS = 120;
+const estimate = (key: string): number => getPage(key).estimateSeconds ?? DEFAULT_ESTIMATE_SECONDS;
+
+// Pages run in parallel, so the wall-clock estimate is the slowest one plus a
 // little slack for the others queueing behind the concurrency limit.
 const CONCURRENCY = 3;
 
 const estimateFor = (keys: string[]): number => {
-  const times = keys.map((k) => ESTIMATE_SECONDS[k] ?? 120).sort((a, b) => b - a);
+  const times = keys.map(estimate).sort((a, b) => b - a);
   const waves = Math.ceil(times.length / CONCURRENCY);
   return Math.round(times.slice(0, waves).reduce((a, b) => a + b, 0) * 1.1);
 };
@@ -72,35 +67,17 @@ function decodePhoto(uri: string): { buf: Buffer; ext: "png" | "jpeg" } {
   return { buf: Buffer.from(m[2]!, "base64"), ext };
 }
 
-async function runSingle(job: Job, photoUri: string): Promise<void> {
-  const { buf, ext } = decodePhoto(photoUri);
-  await mapWithConcurrency(job.keys, CONCURRENCY, async (key) => {
-    const started = Date.now();
-    emit(job, { type: "scene-start", key });
-    const scene = SCENES[key];
-    if (!scene) throw new Error(`Unknown scene ${key}`);
-    const out = await personalizeScene(scene, buf, ext, {
-      onStage: (stage) => { emit(job, { type: "stage", key, stage }); },
-    });
-    emit(job, { type: "scene-done", key, image: dataUri(out), seconds: Math.round((Date.now() - started) / 1000) });
-  });
-}
-
-async function runMulti(job: Job, photoUris: string[]): Promise<void> {
+/**
+ * Both modes are the same call now — personalizePage routes on the page's own
+ * character count, so the server doesn't need to know the difference.
+ */
+async function runPages(job: Job, photoUris: string[]): Promise<void> {
   // Photos map to the drawn characters left-to-right, same convention as the CLI.
   const characters: CharacterInput[] = photoUris.map((uri, i) => ({ slot: `child_${i + 1}`, photoUrl: uri }));
   await mapWithConcurrency(job.keys, CONCURRENCY, async (key) => {
     const started = Date.now();
     emit(job, { type: "scene-start", key });
-    const scene = MULTI_SCENES[key];
-    if (!scene) throw new Error(`Unknown multi scene ${key}`);
-    const page: BookPage = {
-      id: scene.id,
-      imagePath: scene.imagePath,
-      slots: characters.map((c) => c.slot),
-      expectedCharacterCount: scene.expectedCharacterCount,
-    };
-    const out = await personalizePage(page, characters, {
+    const out = await personalizePage(getPage(key), characters, {
       onStage: (stage) => { emit(job, { type: "stage", key, stage }); },
     });
     emit(job, { type: "scene-done", key, image: dataUri(out), seconds: Math.round((Date.now() - started) / 1000) });
@@ -114,8 +91,8 @@ app.get("/", async (_req, reply) => {
 });
 
 app.get("/api/scenes", async () => ({
-  single: Object.keys(SCENES).map((k) => ({ key: k, estimate: ESTIMATE_SECONDS[k] ?? 120 })),
-  multi: Object.keys(MULTI_SCENES).map((k) => ({ key: k, estimate: ESTIMATE_SECONDS[k] ?? 120 })),
+  single: soloPages.map((p) => ({ key: p.id, estimate: estimate(p.id) })),
+  multi: duoPages.map((p) => ({ key: p.id, estimate: estimate(p.id) })),
 }));
 
 app.post("/api/run", async (req, reply) => {
@@ -135,15 +112,14 @@ app.post("/api/run", async (req, reply) => {
     return reply.code(400).send({ error: (e as Error).message });
   }
 
-  const keys = mode === "single" ? Object.keys(SCENES) : Object.keys(MULTI_SCENES);
+  const keys = (mode === "single" ? soloPages : duoPages).map((p) => p.id);
   const job: Job = { id: Math.random().toString(36).slice(2, 10), mode, keys, events: [], done: false, listeners: [] };
   jobs.set(job.id, job);
 
   // Fire and forget — the browser follows progress over SSE.
   void (async () => {
     try {
-      if (mode === "single") await runSingle(job, photos[0]!);
-      else await runMulti(job, photos);
+      await runPages(job, photos);
       emit(job, { type: "done" });
     } catch (e) {
       job.error = (e as Error).message;

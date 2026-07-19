@@ -1,22 +1,27 @@
 # Personalized Children's Book Platform — Prototype
 
 Photo-to-illustration pipeline: parents upload their children's photos and receive an
-illustrated **preview** of those children composited into a story scene. This repository is
-the **prototype** scope: one template scene, true multi-character (2+ children in one
-scene), proving a template-and-composite architecture rather than the full multi-page/
-multi-theme library. See [PROJECT_PLAN.md §17](PROJECT_PLAN.md) for the pivot from the
-original single-character scope.
+illustrated **preview** of those children drawn into a story page. This repository is the
+**prototype** scope — a handful of pages, true multi-character (2+ children on one page) —
+proving the engine rather than the full multi-page/multi-theme library.
 
-> Full engineering plan: **[PROJECT_PLAN.md](PROJECT_PLAN.md)** — read this first.
+> Architecture and current state: **[apps/api/README.md](apps/api/README.md)** — read this
+> first. [PROJECT_PLAN.md](PROJECT_PLAN.md) is the original engineering plan and is now
+> largely a historical record; it describes two architectures that were tried and replaced.
 
 ## What it does
 
 ```
-per character: upload → face validation → portrait generation → background removal
-             → skin-tone extraction
-once all characters are ready: composite onto the scene template → live status (SSE)
-             → preview image
+per character: upload → face validation (local, free)
+per page:      repaint the illustration as this child → swap for exact identity
+               → restore → heal → eye fix
+               → live status (SSE) → preview image
 ```
+
+The repaint stage sees the photograph directly, so one generic prompt personalizes any child
+with no per-child tuning and no per-template calibration. Multi-character pages crop each
+drawn character out, personalize them individually, and feather the results back onto the
+page. Full detail in [apps/api/README.md](apps/api/README.md).
 
 ## Repository layout
 
@@ -41,10 +46,9 @@ childrens-book-platform/
 ## Tech stack
 
 Node 20 · TypeScript · Fastify · Prisma + Postgres (Neon) · BullMQ + Redis (Upstash) ·
-Cloudflare R2 · `@tensorflow/tfjs` + blazeface (face detection) · remove.bg · a free Hugging
-Face Space (InstantID, portrait generation) · Sharp (compositing) · Next.js 14 + Tailwind
-(deferred). Full rationale in [PROJECT_PLAN.md §3](PROJECT_PLAN.md); deviations from the
-original proposal in `apps/api/README.md`.
+Cloudflare R2 · `@tensorflow/tfjs` + blazeface (local face detection) · Replicate
+(`google/nano-banana` repaint, InsightFace inswapper swap, CodeFormer restore) · Sharp
+(local image work) · Next.js 14 + Tailwind (deferred).
 
 ## Getting started
 
@@ -63,16 +67,16 @@ multi-character loop end-to-end.
 
 ## Status
 
-Core loop built and verified end-to-end, including a mid-build pivot to multi-character +
-template compositing — see [PROJECT_PLAN.md §17](PROJECT_PLAN.md) for what changed and why,
-and `apps/api/README.md`'s "Known state" section for what's verified vs. still pending a
-final combined confirmation. [docs/CLIENT_UPDATE.md](docs/CLIENT_UPDATE.md) has the latest
-client-facing update.
+Core loop built and verified end-to-end, single- and multi-character, through both the real
+API and a browser demo UI. See `apps/api/README.md`'s "Known state" for exactly what is
+verified and the open risks — the licensing one blocks selling, not building.
+[docs/DEMO_RUNBOOK.md](docs/DEMO_RUNBOOK.md) is the client-demo procedure.
 
 ## Scope boundary
 
-In scope: multi-character upload → per-character pipeline → template compositing → one
-preview image, documented API (**API-only**; browser test UI deferred). Out of scope
+In scope: multi-character upload → per-character pipeline → personalized pages, documented
+API (**API-only**; browser test UI deferred, though a standalone demo UI ships in
+`apps/api/demo/`). Out of scope
 (Phase 2+): the full multi-page/multi-theme template library, cart/checkout, 300 DPI print
 PDF, print-provider integration, admin dashboard, GDPR deletion workflow, auth, email, full
 i18n. See [PROJECT_PLAN.md §2, §16 & §17](PROJECT_PLAN.md).

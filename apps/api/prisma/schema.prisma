@@ -24,7 +24,6 @@ model Character {
   slot        String // matches a face region in the session's template, e.g. "child_1"
   childName   String
   rawKey      String? // R2 key, original upload
-  skinToneHex String? // sampled from the raw upload's face region
   jobId       String? // BullMQ job id for status lookup
 
   @@unique([sessionId, slot])

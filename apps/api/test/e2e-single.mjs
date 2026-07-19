@@ -1,11 +1,11 @@
-// End-to-end check for the face-swap pipeline (book "demo-book"). Creates a session, uploads one real photo,
-// and watches the SSE stream through validate -> skin_tone -> swap (one face
-// swap per book page, run in parallel).
+// End-to-end check for the one-child book "demo-book". Creates a session,
+// uploads one real photo, and watches the SSE stream through validate ->
+// render (the pages of the book are rendered in parallel).
 //
 // Usage: node test/e2e-single.mjs <photo.jpg> [childName]
 // Requires the API server running (npm run dev) with REDIS_URL, R2 and
-// REPLICATE_API_TOKEN configured. Swaps run on CPU in seconds once warm (first
-// call may take ~60s on a cold Replicate boot).
+// REPLICATE_API_TOKEN configured. Budget a few minutes: the repaint stage is the
+// slow one at ~90-170s per page, and a cold Replicate boot adds to the first.
 
 import { readFile } from "node:fs/promises";
 import { Agent, fetch as undiciFetch } from "undici";

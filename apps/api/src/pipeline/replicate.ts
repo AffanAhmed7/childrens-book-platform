@@ -8,8 +8,8 @@ interface Prediction {
   status: "starting" | "processing" | "succeeded" | "failed" | "canceled";
   output?: string | string[];
   error?: string | null;
-  // The model's own stdout — see faceSwap.ts. The swap model can report
-  // `status: "succeeded"` with no output and only "No face found" in the logs.
+  // The model's own stdout. The swap model can report `status: "succeeded"`
+  // with no output and only "No face found" in the logs.
   logs?: string | null;
   urls: { get: string };
 }

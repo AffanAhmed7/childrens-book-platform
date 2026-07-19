@@ -1,6 +1,7 @@
-// Used by faceSwap.ts, the sole implementation of the swap step with no
-// fallback, so a single transient network blip or rate-limit shouldn't fail
-// the whole session. Retries on network errors, 5xx, and 429 — 429 means
+// Every Replicate call goes through here. There is no fallback provider, so a
+// single transient network blip or rate-limit must not fail a whole session —
+// especially not after the expensive repaint has already been paid for.
+// Retries on network errors, 5xx, and 429 — 429 means
 // "slow down, try again," unlike other 4xx (which mean the request itself is
 // wrong and a retry won't help). Was hit for real on a low-credit Replicate
 // account (6 requests/min, burst of 1) once page concurrency issued several

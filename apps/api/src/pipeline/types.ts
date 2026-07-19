@@ -1,4 +1,5 @@
-export type PipelineStep = "validate" | "skin_tone" | "swap";
+/** The steps a session reports progress for over SSE. */
+export type PipelineStep = "validate" | "render";
 
 export interface FaceBox {
   left: number;
@@ -13,9 +14,9 @@ export interface ValidationResult {
   faceBox: FaceBox;
 }
 
+/** One child, as the engine needs them: which drawn slot, and their photo. */
 export interface CharacterInput {
   slot: string;
-  photoUrl: string; // signed URL of the child's photo (the face source)
-  skinToneHex?: string | null;
-  hairToneHex?: string | null;
+  /** Signed URL or data URI of the child's photo — the face source. */
+  photoUrl: string;
 }
