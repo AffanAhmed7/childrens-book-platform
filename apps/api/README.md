@@ -153,15 +153,16 @@ Jobs use `attempts: 1` — no automatic BullMQ retry, so a failure surfaces imme
 happen at the HTTP level inside a call (`retry.ts`) and for the swap model's own false-negative
 face detection (`replicate.ts`'s `noFaceRetries`).
 
-## Demo harness
+## Homepage and demo harness
 
-`demo/` runs the identical engine with no Postgres, Redis, BullMQ or S3 — so a client demo
-can't be taken down by infrastructure that has nothing to do with what's being shown.
+`homepage/` (the client-facing browser UI) and `demo/` (CLI + benchmark + QA images) both run
+the identical engine with no Postgres, Redis, BullMQ or S3 — so a client demo can't be taken
+down by infrastructure that has nothing to do with what's being shown.
 
 ```bash
-npm run demo:web                          # browser UI on :5174, live per-stage progress
+npm run homepage                          # browser UI on :5174, live per-stage progress
 npm run personalize -- kid.jpg            # CLI, every page
-npm run personalize -- kid.jpg dad.png --page mc_2
+npm run personalize -- kid.jpg dad.png --page newtemp
 npm run personalize -- kid.jpg dad.png --detect-only   # FREE preflight, no API calls
 ```
 
@@ -180,7 +181,7 @@ Test scripts against the real API:
 **Verified end-to-end through the real API:** a full multi-character session — create → upload
 two different children's photos → confirm → SSE through `validate`/`render` → `done` —
 producing correct per-character results on both a solo and a two-character page. The browser
-demo UI has been verified the same way from a fresh clone.
+homepage has been verified the same way from a fresh clone.
 
 **Open risks, in priority order:**
 

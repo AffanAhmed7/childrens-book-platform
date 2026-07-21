@@ -107,21 +107,27 @@ export const PAGES: Record<string, Page> = {
   },
 
   // Two-character pages. Clean illustrator art already at the right framing, so
-  // no chrome crop.
-  mc_2: {
-    id: "mc_2",
-    imagePath: path.join(ASSETS, "MC_2.jpeg"),
+  // no chrome crop. Both draw the ADULT on the left and the CHILD on the right —
+  // backwards from the upload convention (child uploaded first, as child_1), so
+  // both need `slots` to remap: without it, the child's photo lands on the
+  // drawn adult and vice versa. Confirmed live 2026-07-20 — the demo produced
+  // exactly that mismatch before this was set.
+  newtemp: {
+    id: "newtemp",
+    imagePath: path.join(ASSETS, "newtemp.jpg"),
     characters: 2,
-    caption: "Two friends",
+    slots: ["child_2", "child_1"],
+    caption: "Adventure land",
     preview: true,
     estimateSeconds: 185,
   },
-  mc_3: {
-    id: "mc_3",
-    imagePath: path.join(ASSETS, "MC_3.jpeg"),
+  newtemp2: {
+    id: "newtemp2",
+    imagePath: path.join(ASSETS, "newtemp2.jpg"),
     characters: 2,
-    caption: "To the stars",
-    estimateSeconds: 155,
+    slots: ["child_2", "child_1"],
+    caption: "The adventure awaits",
+    estimateSeconds: 185,
   },
 };
 
@@ -132,7 +138,7 @@ export const BOOKS: Record<string, BookConfig> = {
   },
   "demo-book-duo": {
     title: "Demo book — two children",
-    pageIds: ["mc_2", "mc_3"],
+    pageIds: ["newtemp", "newtemp2"],
   },
 };
 

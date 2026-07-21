@@ -7,7 +7,7 @@ Client-provided and QA assets.
   per-template calibration.
 
   Two kinds live here today:
-  - **`MC_2.jpeg`, `MC_3.jpeg`** — clean two-character illustration, already at the right
+  - **`newtemp.jpg`, `newtemp2.jpg`** — clean two-character illustration, already at the right
     framing. These are what the engine is meant to consume.
   - **`temp_1.jpeg`, `temp_2.jpeg`, and the WhatsApp-named file** — screenshots of a
     competitor's preview flow, with French UI chrome baked into the pixels (not overlaid).

@@ -20,13 +20,17 @@
 //                     sharpness for guaranteed freedom from swap artifacts.
 //                     Writes to <page>.noswap.png.
 //
-// Photos map to the drawn characters in LEFT-TO-RIGHT order, so pass them in the
-// order they appear on the page. A solo page uses the first photo.
+// Photos map to the drawn characters in LEFT-TO-RIGHT order UNLESS the page sets
+// `slots` in catalog.ts, in which case that order wins instead — some pages draw
+// the adult on the left, so passing photos "left to right" would put the child's
+// photo on the drawn adult. The fixed, page-independent convention is: child
+// first, then adult. `--detect-only`'s output shows the real face<-photo mapping
+// (including any slots remap), so check that before paid work either way.
 //
 // Examples:
 //   npm run personalize -- kid.jpg                          every page
 //   npm run personalize -- kid.jpg --page astronaut         one solo page
-//   npm run personalize -- kid.jpg dad.png --page mc_2      one two-character page
+//   npm run personalize -- kid.jpg dad.png --page newtemp   one two-character page
 //   npm run personalize -- kid.jpg dad.png --detect-only    free preflight
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
@@ -35,6 +39,7 @@ import { PAGES, getPage, characterCount, type Page } from "../src/pipeline/catal
 import { detectPageCharacters } from "../src/pipeline/faceDetect";
 import { characterCrop } from "../src/pipeline/compose";
 import { personalizePage, loadPageArt } from "../src/pipeline/personalize";
+import { dataUri } from "../src/pipeline/dataUri";
 import type { RepaintModel } from "../src/pipeline/stages/repaint";
 import type { CharacterInput } from "../src/pipeline/types";
 
@@ -66,7 +71,6 @@ const pages: Page[] = pageArg === "all" ? Object.values(PAGES) : [getPage(pageAr
 await mkdir(outDir, { recursive: true });
 
 // Photos become data URIs — the same shape production passes as a signed URL.
-const dataUri = (buf: Buffer, ext: string) => `data:image/${ext};base64,${buf.toString("base64")}`;
 const characters: CharacterInput[] = await Promise.all(
   photoPaths.map(async (p, i) => ({
     slot: `child_${i + 1}`,
@@ -90,9 +94,20 @@ async function detect(page: Page): Promise<void> {
 
   const faces = await detectPageCharacters(art, characterCount(page));
 
+  // Mirror personalizePage's own assignment logic (personalize.ts) exactly, so
+  // this preview can't lie about which photo lands on which face — it did,
+  // silently, before `slots` support was added here: it zipped faces[i] straight
+  // to photoPaths[i], ignoring any page.slots remap.
+  const characterSlots = photoPaths.map((_, i) => `child_${i + 1}`);
+  const slotOrder = page.slots ?? characterSlots;
+
   console.log(`  ${meta.width}x${meta.height}, ${faces.length} drawn character(s) detected left-to-right:`);
   faces.forEach((f, i) => {
-    console.log(`    ${i + 1}. box=[${f.left},${f.top} ${f.width}x${f.height}]  <- ${photoPaths[i] ?? "(no photo — left as drawn)"}`);
+    const slot = slotOrder[i];
+    const photoIndex = slot ? characterSlots.indexOf(slot) : -1;
+    const photoPath = photoIndex !== -1 ? photoPaths[photoIndex] : undefined;
+    const slotNote = page.slots ? ` [slot ${slot ?? "none"}]` : "";
+    console.log(`    ${i + 1}. box=[${f.left},${f.top} ${f.width}x${f.height}]  <- ${photoPath ?? "(no photo — left as drawn)"}${slotNote}`);
   });
   if (faces.length !== photoPaths.length) {
     console.warn(`  WARNING: ${faces.length} face(s) detected but ${photoPaths.length} photo(s) given — extras are ignored.`);

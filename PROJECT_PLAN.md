@@ -363,8 +363,8 @@ OpenAPI is generated automatically from route schemas via `@fastify/swagger` +
 > actual QA scripts in `apps/api/test/` are `e2e-single.mjs`, `e2e-multichar.mjs`,
 > `list-past-runs.mjs` and `download-run-images.mjs`.
 >
-> Separately, a **standalone browser demo UI did ship** — `apps/api/demo/web`, run with
-> `npm run demo:web`. It is not the deferred `apps/web` Next.js UI described below: it is
+> Separately, a **standalone browser homepage did ship** — `apps/api/homepage`, run with
+> `npm run homepage`. It is not the deferred `apps/web` Next.js UI described below: it is
 > a self-contained Fastify page that calls the same pipeline functions the production
 > worker calls, with no Postgres, Redis, BullMQ or S3 dependency, so a client demo cannot
 > be taken down by infrastructure unrelated to what is being shown. See
@@ -594,8 +594,8 @@ different mechanism than planned rather than left undone; each is marked.
 - [x] One final preview image — verified end-to-end, single- and multi-character
 - [x] ~~Browser test UI~~ — **deferred** (client confirmed API-only, 2026-07-15). Swagger UI
       at `/docs` plus `test/e2e-single.mjs` / `test/e2e-multichar.mjs` are the API demo/QA
-      surface. **A standalone browser demo UI was nonetheless built** and is the recommended
-      client-facing surface: `apps/api/demo/web`, `npm run demo:web`.
+      surface. **A standalone browser homepage was nonetheless built** and is the recommended
+      client-facing surface: `apps/api/homepage`, `npm run homepage`.
 - [x] Documented API (OpenAPI at `/docs`) — primary interface
 - [ ] **Deployed prototype (API) with a shareable Swagger `/docs` demo URL — still
       local-only, not hosted.** The only outstanding deliverable.
@@ -663,7 +663,7 @@ named Phase-2+ item, not an omission.
 >
 > **Do not act on the instruction at the end of this section** to wait for a Hugging Face
 > quota reset and re-run — that pipeline no longer exists. To verify multi-character
-> today: `npm run personalize -- <child> <adult> --page mc_2` (or `--detect-only` first,
+> today: `npm run personalize -- <child> <adult> --page newtemp` (or `--detect-only` first,
 > which is free).
 >
 > The ZeroGPU quota post-mortem is kept because its two incidental fixes are still in the

@@ -7,8 +7,8 @@ Lightweight deployment reference (no heavy IaC for a 3-day prototype).
 > `/docs` URL. It is the one outstanding deliverable in
 > [PROJECT_PLAN.md §14](../PROJECT_PLAN.md).
 >
-> The Web/Vercel row is for the **deferred** `apps/web` UI, which is unbuilt. The demo
-> that exists today (`npm run demo:web`) runs locally and needs none of the components
+> The Web/Vercel row is for the **deferred** `apps/web` UI, which is unbuilt. The homepage
+> that exists today (`npm run homepage`) runs locally and needs none of the components
 > in this table except a Replicate token.
 
 | Component | Host | Notes |

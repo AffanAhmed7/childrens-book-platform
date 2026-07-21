@@ -10,7 +10,7 @@
     "dev": "tsx watch src/index.ts",
     "start": "tsx src/index.ts",
     "personalize": "tsx demo/personalize.mts",
-    "demo:web": "tsx demo/web/server.mts",
+    "homepage": "tsx homepage/server.mts",
     "bench:swap": "tsx demo/bench-swap.mts",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "prisma:generate": "prisma generate",

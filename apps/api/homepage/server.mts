@@ -1,6 +1,6 @@
-// Standalone demo server — feed it photos in a browser, get finished pages back.
+// The product homepage — feed it photos in a browser, get finished pages back.
 //
-//   npm run demo:web        (then open http://localhost:5174)
+//   npm run homepage        (then open http://localhost:5174)
 //
 // Deliberately ISOLATED from src/app.ts (the production Fastify app). That one
 // needs Postgres, Redis, BullMQ and S3 to boot; this one needs none of them, so
@@ -16,13 +16,15 @@ import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import Fastify from "fastify";
-import { PAGES, getPage, characterCount } from "../../src/pipeline/catalog";
-import { personalizePage } from "../../src/pipeline/personalize";
-import { mapWithConcurrency } from "../../src/pipeline/pool";
-import type { CharacterInput } from "../../src/pipeline/types";
+import { PAGES, getPage, characterCount } from "../src/pipeline/catalog";
+import { personalizePage } from "../src/pipeline/personalize";
+import { mapWithConcurrency } from "../src/pipeline/pool";
+import { dataUri } from "../src/pipeline/dataUri";
+import { warmFaceDetector } from "../src/pipeline/faceDetect";
+import type { CharacterInput } from "../src/pipeline/types";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
-const PORT = Number(process.env.DEMO_WEB_PORT ?? 5174);
+const PORT = Number(process.env.HOMEPAGE_PORT ?? 5174);
 
 // The UI offers two modes, which is just a split of the catalog by how many
 // characters a page draws: "single" needs one photo, "multi" needs two.
@@ -57,8 +59,6 @@ const emit = (job: Job, event: Record<string, unknown>) => {
   job.events.push(event);
   for (const l of job.listeners) l(event);
 };
-
-const dataUri = (buf: Buffer, ext = "png") => `data:image/${ext};base64,${buf.toString("base64")}`;
 
 function decodePhoto(uri: string): { buf: Buffer; ext: "png" | "jpeg" } {
   const m = /^data:image\/(png|jpe?g);base64,(.+)$/i.exec(uri);
@@ -155,6 +155,10 @@ app.get("/api/run/:id/events", async (req, reply) => {
     reply.raw.end();
   }
 });
+
+// Pays the one-time blazeface model load (~5-13s, measured) during boot
+// instead of on whichever request happens to hit face detection first.
+await warmFaceDetector();
 
 const address = await app.listen({ port: PORT, host: "0.0.0.0" });
 console.log(`\n  Demo UI running at ${address.replace("0.0.0.0", "localhost")}\n`);

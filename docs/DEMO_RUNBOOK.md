@@ -37,27 +37,33 @@ broken; you just need to bring your own.
 Put two photos there before testing (any names — these are only used by the CLI
 examples in section 7):
 
-- one **child** photo → used for single-character scenes, and as the LEFT
-  character in multi-character pages
-- one **adult** photo → used as the RIGHT character in multi-character pages
+- one **child** photo → used for single-character scenes, and as the FIRST
+  photo in multi-character pages
+- one **adult** photo → used as the SECOND photo in multi-character pages
+
+Upload order is child-first, adult-second — fixed, regardless of which side
+of the artwork each is drawn on. Pages that draw the adult on the left (like
+`newtemp`/`newtemp2`) remap internally via `slots` in `catalog.ts`; you never
+need to know or check which side a page draws which character on.
 
 Best results: front-facing, well lit, one clear face, no sunglasses. The web UI
 takes photos straight from your computer, so it needs nothing in this folder.
 
 ---
 
-## 2. The web demo (use this in front of a client)
+## 2. The homepage (use this in front of a client)
 
 ```bash
 cd apps/api
-npm run demo:web
+npm run homepage
 ```
 
 Open **http://localhost:5174**.
 
 - Pick a tab: *Single character* or *Two characters*.
-- Drop in a photo (JPEG or PNG). Multi mode takes two — **left character first,
-  then right**. On both current pages that means the child first, the adult second.
+- Drop in a photo (JPEG or PNG). Multi mode takes two — **the child first,
+  then the adult**, always in that order regardless of which side either is
+  drawn on.
 - Hit **Generate**. Each scene shows its live stage and a running clock; the
   page shows an estimated total.
 - Click any finished image to enlarge, or use *Download full size*.
@@ -69,7 +75,7 @@ It works with **any** person's photo — nothing is hard-coded to a particular f
 | Mode | Scenes | Budget for |
 |---|---|---|
 | Single character | plane, astronaut, workshop | **3–5 minutes** |
-| Multi character | mc_2, mc_3 | **3–4 minutes** |
+| Multi character | newtemp, newtemp2 | **3–4 minutes** |
 
 Scenes run in parallel (3 at a time), so total time is roughly the slowest
 scene rather than the sum — but parallel scenes contend for the same Replicate
@@ -113,7 +119,7 @@ network, no credit**. If anything at all goes wrong, open these:
 | `STATUS-all.png` | Everything at a glance — all 5 pages. Best single opener. |
 | `MULTI-before-after.png` | Template art vs personalized, both multi pages. Strongest asset. |
 | `plane/astronaut/workshop.png` | Single-character scenes (source photo: `assets/test-photos/kid.png`) |
-| `mc_2.png`, `mc_3.png` | Multi-character pages (sources: `3.jpg` + `man.png`) |
+| `newtemp.png`, `newtemp2.png` | Multi-character pages (sources: `3.jpg` + `man.png`) |
 
 **If you only have five minutes and one shot, present these and don't generate
 live.** They are real pipeline outputs, not mockups.
@@ -134,7 +140,7 @@ live.** They are real pipeline outputs, not mockups.
    repaint → face match → blend → clean up → eyes.
 
 **Lead with the astronaut** if you can only show one single-character scene, and
-**mc_3 (the cover)** for multi.
+**newtemp (the cover)** for multi.
 
 ---
 
@@ -145,7 +151,7 @@ Be aware of these; don't volunteer them, but don't be caught out either.
 - **Hair length.** The repaint tends to lengthen short hair into a chin-length
   bob. Visible on plane and workshop. The astronaut's helmet hides it — another
   reason to lead with astronaut.
-- **Don't zoom into eyes** on mc_3. The two irises are slightly different colours.
+- **Don't zoom into eyes** on multi pages. The two irises are slightly different colours.
 - **Don't zoom into hands** on workshop; they read slightly paler than the face.
 - **Eye colour on multi pages** comes from the illustration, not the photo. The
   likeness carries through face shape, skin tone and hair. This is a deliberate
@@ -167,10 +173,10 @@ and wait a few minutes. Fall back to section 3.
 model could not read a face. Retry once; if it persists, use a different photo
 (front-facing, well lit). This is the least reliable step in the pipeline.
 
-**Port 5174 already in use** — `set DEMO_WEB_PORT=5180` (Windows) or
-`DEMO_WEB_PORT=5180` (macOS/Linux) before `npm run demo:web`.
+**Port 5174 already in use** — `set HOMEPAGE_PORT=5180` (Windows) or
+`HOMEPAGE_PORT=5180` (macOS/Linux) before `npm run homepage`.
 
-**It hangs with no progress** — check the terminal running `npm run demo:web`;
+**It hangs with no progress** — check the terminal running `npm run homepage`;
 Replicate errors surface there.
 
 ---
@@ -194,14 +200,16 @@ npm run personalize -- ../../assets/test-photos/<child.jpg>
 # One page, with intermediate stage frames
 npm run personalize -- ../../assets/test-photos/<child.jpg> --page astronaut --debug
 
-# A two-character page (child photo FIRST, then adult — left to right)
-npm run personalize -- ../../assets/test-photos/<child.jpg> ../../assets/test-photos/<adult.jpg> --page mc_2
+# A two-character page (child photo FIRST, then adult — fixed convention,
+# regardless of which side either is drawn on; the page's own `slots` in
+# catalog.ts remaps to the artwork)
+npm run personalize -- ../../assets/test-photos/<child.jpg> ../../assets/test-photos/<adult.jpg> --page newtemp
 
 # Free: check face detection and crops without spending any credit
-npm run personalize -- ../../assets/test-photos/<child.jpg> ../../assets/test-photos/<adult.jpg> --page mc_2 --detect-only
+npm run personalize -- ../../assets/test-photos/<child.jpg> ../../assets/test-photos/<adult.jpg> --page newtemp --detect-only
 ```
 
-Page ids are `astronaut`, `plane`, `workshop` (one child) and `mc_2`, `mc_3`
+Page ids are `astronaut`, `plane`, `workshop` (one child) and `newtemp`, `newtemp2`
 (two children), or `all`. They are defined in `apps/api/src/pipeline/catalog.ts`.
 
 `--detect-only` costs nothing and is the right way to sanity-check a new template

@@ -10,6 +10,7 @@ import { personalizePage } from "./pipeline/personalize";
 import { getBook, pagesFor, pageObjectKey, type Page } from "./pipeline/catalog";
 import { mapWithConcurrency } from "./pipeline/pool";
 import { createDownloadUrl, putObject, objectExists } from "./storage";
+import { warmFaceDetector } from "./pipeline/faceDetect";
 
 // How many pages are personalized at once. Each page may itself issue one
 // repaint+swap per character, so the real ceiling on in-flight API calls is this
@@ -101,6 +102,11 @@ async function processJob(job: Job<PipelineJobData>): Promise<void> {
 }
 
 export function startPipelineWorker(): Worker<PipelineJobData> {
+  // Fire-and-forget: loads the blazeface model now so the first real job
+  // doesn't pay the ~5-13s one-time load cost. Safe to not await — any job
+  // that starts before this resolves just shares the same in-flight promise
+  // (see getModel in faceDetect.ts), it never loads twice.
+  void warmFaceDetector();
   return new Worker<PipelineJobData>(PIPELINE_QUEUE_NAME, processJob, {
     connection: createRedisConnection(),
     concurrency: Number(process.env.WORKER_CONCURRENCY ?? "1"),

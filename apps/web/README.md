@@ -4,10 +4,10 @@
 > confirmed an **API-only** engagement for this phase. It is retained as the placeholder
 > for a future UI phase; the design below is the reference for it.
 >
-> **Do not confuse this with the demo UI that does exist.** A standalone browser demo
-> shipped separately at `apps/api/demo/web` (`npm run demo:web`, port 5174) — a
+> **Do not confuse this with the homepage that does exist.** A client-facing browser UI
+> shipped separately at `apps/api/homepage` (`npm run homepage`, port 5174) — a
 > self-contained Fastify page with no Postgres/Redis/BullMQ/S3 dependency, calling the
-> same pipeline functions production calls. That is the client-facing demo surface today;
+> same pipeline functions production calls. That is the client-facing surface today;
 > see [docs/DEMO_RUNBOOK.md](../../docs/DEMO_RUNBOOK.md). It is *not* this Next.js app and
 > does not implement the flow described below.
 >

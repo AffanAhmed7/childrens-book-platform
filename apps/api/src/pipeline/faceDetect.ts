@@ -23,6 +23,18 @@ async function getModel(): Promise<blazeface.BlazeFaceModel> {
   return modelPromise;
 }
 
+/**
+ * Loads the model now instead of on the first real call. Measured at ~5-13s
+ * (higher under concurrent CPU load) — a one-time tax per process, not per
+ * render, but every caller (validate, detectPageCharacters, heal, eyes) shares
+ * the same cached promise, so whichever happens to go first eats it. Call this
+ * at server/worker startup so it lands during boot instead of a user's first
+ * request.
+ */
+export async function warmFaceDetector(): Promise<void> {
+  await getModel();
+}
+
 export interface Point {
   x: number;
   y: number;

@@ -41,7 +41,8 @@ childrens-book-platform/
 ├── apps/
 │   ├── api/             # Fastify + TypeScript backend (.env.example lives here), BullMQ
 │   │                    #   worker, SSE, OpenAPI — AND the engine, in src/pipeline/
-│   │   └── demo/        # standalone browser + CLI demo harness (no DB/Redis/S3 needed)
+│   │   ├── homepage/    # client-facing browser UI (no DB/Redis/S3 needed)
+│   │   └── demo/        # CLI harness + benchmark script + pre-generated QA images
 │   └── web/             # (DEFERRED, empty) Next.js test UI — API-only engagement
 ├── packages/
 │   └── shared/          # (EMPTY placeholder — never populated; see its README)
@@ -64,13 +65,13 @@ Cloudflare R2 · `@tensorflow/tfjs` + blazeface (local face detection) · Replic
 
 ## Getting started
 
-**Just want to see it work?** The demo harness needs only a Replicate token — no Postgres,
+**Just want to see it work?** The homepage needs only a Replicate token — no Postgres,
 no Redis, no storage:
 
 ```bash
 cd apps/api && npm install
 cp .env.example .env         # fill in REPLICATE_API_TOKEN only
-npm run demo:web             # http://localhost:5174
+npm run homepage             # http://localhost:5174
 ```
 
 See [docs/DEMO_RUNBOOK.md](docs/DEMO_RUNBOOK.md) — including the pre-generated images in
@@ -95,7 +96,7 @@ running server.
 ## Status
 
 Core loop built and verified end-to-end, single- and multi-character, through both the real
-API and a browser demo UI. See `apps/api/README.md`'s "Known state" for exactly what is
+API and the browser homepage. See `apps/api/README.md`'s "Known state" for exactly what is
 verified and the open risks — the licensing one blocks selling, not building.
 [docs/DEMO_RUNBOOK.md](docs/DEMO_RUNBOOK.md) is the client-demo procedure.
 
@@ -108,8 +109,8 @@ client demo**, which also warms the repaint cache.
 ## Scope boundary
 
 In scope: multi-character upload → per-character pipeline → personalized pages, documented
-API (**API-only**; browser test UI deferred, though a standalone demo UI ships in
-`apps/api/demo/`). Out of scope
+API (**API-only**; the real marketing site (`apps/web`) is deferred, though a client-facing
+homepage ships at `apps/api/homepage/`). Out of scope
 (Phase 2+): the full multi-page/multi-theme template library, cart/checkout, 300 DPI print
 PDF, print-provider integration, admin dashboard, GDPR deletion workflow, auth, email, full
 i18n. See [PROJECT_PLAN.md §2, §16 & §17](PROJECT_PLAN.md).
