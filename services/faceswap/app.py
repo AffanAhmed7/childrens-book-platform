@@ -231,9 +231,16 @@ def swap(req: SwapRequest) -> Any:
 if __name__ == "__main__":
     import uvicorn
 
+    # See services/restore/app.py's identical block for the full reasoning:
+    # each worker is a separate process with its own lock and its own
+    # resident models, which is what buys real concurrency instead of
+    # requests queueing behind one in-process lock. Costs RAM per worker —
+    # default 1 preserves today's behaviour.
+    workers = int(os.environ.get("FACESWAP_WORKERS", "1"))
     uvicorn.run(
-        app,
+        "app:app" if workers > 1 else app,
         host=os.environ.get("FACESWAP_HOST", "127.0.0.1"),
         port=int(os.environ.get("FACESWAP_PORT", "5175")),
         log_level="info",
+        workers=workers,
     )

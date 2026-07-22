@@ -106,6 +106,7 @@ without this service running is unaffected.
 | `FACESWAP_HOST` | `127.0.0.1` | Loopback by default — do not expose this publicly without auth in front. |
 | `FACESWAP_DET_SIZE` | `640` | Detection resolution. Higher finds smaller faces at more cost. Free to sweep now. |
 | `FACESWAP_MODEL_ROOT` | `./models` | Where weights live. |
+| `FACESWAP_WORKERS` | `1` | Real concurrency, at a RAM cost — see "Concurrency note" below before raising this. |
 
 ## API
 
@@ -127,6 +128,17 @@ instead of `onnxruntime` and put `"CUDAExecutionProvider"` first in the
 `providers` list in `app.py`. Inference drops to roughly 50–100ms. Nothing else
 changes.
 
-Concurrency note: inference is serialised behind one lock, so throughput here
-comes from models being warm rather than from parallelism. On 6 CPU cores that
-is the right trade; a GPU box with batching would want revisiting.
+Concurrency note: inference is serialised behind one in-process lock, so
+throughput here comes from models being warm rather than from parallelism —
+concurrent pages/characters (`CONCURRENCY = 3` in personalize.ts) queue
+behind it instead of running in parallel. `FACESWAP_WORKERS` fixes that for
+real (separate OS processes, each with its own lock and its own resident
+models), but each worker costs RAM — measured ~1GB resident per worker on
+this box. **`RESTORE_WORKERS=2` was tried on this box and reverted — it made
+real usage slower, because committed memory (RAM + page file), not free
+RAM, was the actual constraint; see services/restore/README.md's
+"Concurrency" section for the full story before touching this one too.** On
+a box with real headroom (checked via commit charge, not `FreeGB`),
+services/restore is still the better place to spend it — that
+headroom first, since restore's inference (~7-13s) dominates swap's
+(~3.5s total) by a wide margin.
