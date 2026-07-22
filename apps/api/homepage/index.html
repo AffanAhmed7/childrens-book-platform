@@ -287,6 +287,21 @@ async function run() {
       a.textContent = "Download full size";
       el.appendChild(a);
     }
+    // One page failed but the others keep going — show the reason on that card
+    // instead of blanking it. textContent, not innerHTML, so the message can't inject.
+    if (e.type === "scene-error" && el && !st.rendered.has(e.key)) {
+      st.rendered.add(e.key);
+      el.querySelector(".bar").classList.add("hidden");
+      const badge = el.querySelector(".state");
+      badge.textContent = "failed in " + fmt(e.seconds || 0);
+      badge.className = "state bad";
+      const body = el.querySelector(".body");
+      body.innerHTML = "";
+      const div = document.createElement("div");
+      div.className = "wait";
+      div.textContent = e.message || "This scene failed.";
+      body.appendChild(div);
+    }
     if (e.type === "error") {
       showError(e.message);
       gridFor(runMode).querySelectorAll(".res .state").forEach((s) => {

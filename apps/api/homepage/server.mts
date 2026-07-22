@@ -76,11 +76,22 @@ async function runPages(job: Job, photoUris: string[]): Promise<void> {
   const characters: CharacterInput[] = photoUris.map((uri, i) => ({ slot: `child_${i + 1}`, photoUrl: uri }));
   await mapWithConcurrency(job.keys, CONCURRENCY, async (key) => {
     const started = Date.now();
+    const secs = () => Math.round((Date.now() - started) / 1000);
     emit(job, { type: "scene-start", key });
-    const out = await personalizePage(getPage(key), characters, {
-      onStage: (stage) => { emit(job, { type: "stage", key, stage }); },
-    });
-    emit(job, { type: "scene-done", key, image: dataUri(out), seconds: Math.round((Date.now() - started) / 1000) });
+    try {
+      const out = await personalizePage(getPage(key), characters, {
+        onStage: (stage) => { emit(job, { type: "stage", key, stage }); },
+      });
+      emit(job, { type: "scene-done", key, image: dataUri(out), seconds: secs() });
+    } catch (err) {
+      // Isolate the failure to THIS page: log the real cause to the terminal and
+      // tell the browser which page failed and why. Without this, one page's error
+      // rejected the whole job (mapWithConcurrency is fail-fast) and the UI blanked
+      // every still-running page as "stopped" — which is exactly how a single
+      // scene could "fail to display" with no visible reason.
+      console.error(`[homepage] page "${key}" failed after ${secs()}s:`, err);
+      emit(job, { type: "scene-error", key, message: (err as Error).message, seconds: secs() });
+    }
   });
 }
 
