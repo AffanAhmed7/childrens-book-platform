@@ -21,6 +21,7 @@ import { personalizePage } from "../src/pipeline/personalize";
 import { mapWithConcurrency } from "../src/pipeline/pool";
 import { dataUri } from "../src/pipeline/dataUri";
 import { warmFaceDetector } from "../src/pipeline/faceDetect";
+import { validatePhotoBuffer, ValidationError } from "../src/pipeline/validate";
 import type { CharacterInput } from "../src/pipeline/types";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -117,10 +118,22 @@ app.post("/api/run", async (req, reply) => {
   if (mode === "multi" && photos.length !== 2) {
     return reply.code(400).send({ error: "Multi-character mode needs exactly two photos (left, then right)." });
   }
+  let decoded: { buf: Buffer; ext: "png" | "jpeg" }[];
   try {
-    photos.forEach(decodePhoto);
+    decoded = photos.map(decodePhoto);
   } catch (e) {
     return reply.code(400).send({ error: (e as Error).message });
+  }
+
+  // The SAME guard the production worker runs (min 200x200, exactly one clear
+  // face), BEFORE any paid repaint/swap. A wrong upload — too small, no face, a
+  // group photo — fails fast and free here with a friendly message, instead of
+  // burning a repaint and then dying at the swap (the "no face" retry storm).
+  try {
+    await Promise.all(decoded.map((d) => validatePhotoBuffer(d.buf)));
+  } catch (e) {
+    if (e instanceof ValidationError) return reply.code(400).send({ error: e.message });
+    throw e;
   }
 
   const keys = (mode === "single" ? soloPages : duoPages).map((p) => p.id);
