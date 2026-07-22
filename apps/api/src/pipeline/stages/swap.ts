@@ -8,7 +8,7 @@ import { env } from "../../env";
 //
 // TWO BACKENDS, one contract. `SWAP_BACKEND` selects:
 //
-//   replicate (default) — the hosted codeplugtech/face-swap model.
+//   replicate (default) — the hosted ddvinh1/face-swap-gpu model.
 //   local               — services/faceswap, the same inswapper model self-hosted.
 //                         Errors if the service is down (strict; for testing).
 //   auto                — try local first, fall back to hosted on ANY local
@@ -32,7 +32,15 @@ import { env } from "../../env";
 
 // Pinned: the version-based /predictions endpoint requires it, and it stops
 // behaviour drifting if the owner pushes an update.
-const FACE_SWAP_VERSION = "278a81e7ebb22db98bcba54de985d22cc1abeead2754eb1f2af717247be69b34";
+//
+// EXPERIMENT (feat/faceswap-gpu-model): swapped from codeplugtech/face-swap
+// (278a81e7…, CPU, ~55-90s, ~$0.006) to ddvinh1/face-swap-gpu — an InsightFace
+// inswapper variant that runs on a T4 GPU at ~1s and ~$0.0002/call. Same input
+// contract (input_image = target artwork, swap_image = child photo), so this is a
+// drop-in version bump. NOTE: it also exposes an `enhance` (GFPGAN) flag, left OFF
+// so the pipeline's own restore stage still owns enhancement — keeping everything
+// downstream identical.
+const FACE_SWAP_VERSION = "d766886cf43ea2e9821703c392e3d403d2311eb8d013feef924655f9b7e2971d";
 
 // Both backends' face detectors false-negative ("No face found") on some
 // target/photo pairs far more than others. Two causes were found and fixed
