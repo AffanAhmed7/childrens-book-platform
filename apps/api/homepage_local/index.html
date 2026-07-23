@@ -80,7 +80,7 @@
 
 <main>
   <div class="tabs" role="tablist">
-    <button class="tab" role="tab" aria-selected="true" data-mode="single">Single character — 3 scenes</button>
+    <button class="tab" role="tab" aria-selected="true" data-mode="single">Single character — 2 scenes</button>
     <button class="tab" role="tab" aria-selected="false" data-mode="multi">Two characters — 2 pages</button>
   </div>
 
@@ -88,7 +88,7 @@
 
   <div class="card">
     <h2 id="modeTitle">Single character</h2>
-    <div class="sub" id="modeSub">One photo produces all three scenes. Any child — nothing is hard-coded to a particular face.</div>
+    <div class="sub" id="modeSub">One photo produces both scenes. Any child — nothing is hard-coded to a particular face.</div>
     <div class="slots" id="slots"></div>
     <div class="actions">
       <button class="go" id="go" disabled>Generate</button>
@@ -214,6 +214,13 @@ async function run() {
   const grid = gridFor(runMode);
   grid.innerHTML = "";
 
+  const runStarted = Date.now();
+  // Full detail to the browser console for every step — the UI only shows a
+  // short per-card label, so anyone diagnosing a slow or failed run needs
+  // this instead of guessing from what's on screen.
+  const log = (...args) => console.log("[local +" + ((Date.now() - runStarted) / 1000).toFixed(1) + "s]", ...args);
+  log("run started", { mode: runMode });
+
   let res;
   try {
     res = await fetch("/api/run", {
@@ -222,10 +229,15 @@ async function run() {
       body: JSON.stringify(payload),
     }).then((r) => r.json());
   } catch (e) {
+    log("POST /api/run FAILED", e.message || e);
     st.live = false; syncGo();
     return showError("Could not reach the server. Is it still running?");
   }
-  if (res.error) { st.live = false; syncGo(); return showError(res.error); }
+  if (res.error) {
+    log("POST /api/run rejected", res.error);
+    st.live = false; syncGo(); return showError(res.error);
+  }
+  log("job created", res.jobId, "pages:", res.keys, "estimate:", res.estimateSeconds + "s");
 
   for (const k of res.keys) grid.appendChild(card(k, runMode));
 
@@ -245,6 +257,7 @@ async function run() {
   setEta("Estimated <b>" + fmt(est) + "</b>");
 
   const finish = (html) => {
+    log("run finished", html.replace(/<[^>]+>/g, ""));
     clearInterval(st.timer);
     st.live = false;
     setEta(html);
@@ -261,6 +274,7 @@ async function run() {
   const stop = () => { closed = true; if (src) src.close(); };
 
   const handle = (e) => {
+    log("SSE event", e);
     const el = document.getElementById("res-" + runMode + "-" + e.key);
 
     if (e.type === "scene-start" && el) {
@@ -318,14 +332,18 @@ async function run() {
   };
 
   const connect = () => {
+    log("SSE connecting", "/api/run/" + res.jobId + "/events");
     src = new EventSource("/api/run/" + res.jobId + "/events");
+    src.onopen = () => log("SSE connection opened");
     src.onmessage = (m) => { retries = 0; handle(JSON.parse(m.data)); };
     src.onerror = () => {
+      log("SSE connection error/closed", { readyState: src && src.readyState, retries });
       if (src) src.close();
       if (closed) return;
       // A finished job's stream is closed by the server, which also lands here.
       // Retry a few times; the replay tells us if it actually completed.
       if (retries >= 6) {
+        log("giving up after 6 reconnect attempts");
         finish("Connection lost — the run may still be finishing. Check the terminal.");
         return;
       }
@@ -343,7 +361,7 @@ document.querySelectorAll(".tab").forEach((t) => {
     mode = t.dataset.mode;
     $("modeTitle").textContent = mode === "single" ? "Single character" : "Two characters";
     $("modeSub").textContent = mode === "single"
-      ? "One photo produces all three scenes. Any child — nothing is hard-coded to a particular face."
+      ? "One photo produces both scenes. Any child — nothing is hard-coded to a particular face."
       : "Two photos, one page. Each drawn character is detected and personalized independently, left to right.";
     // Show this mode's grid, keep the other one intact — a run in flight (or a
     // finished one) must survive the user glancing at the other tab.

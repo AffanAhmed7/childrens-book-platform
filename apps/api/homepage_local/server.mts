@@ -37,7 +37,15 @@ const PORT = Number(process.env.HOMEPAGE_LOCAL_PORT ?? 5179);
 
 // The UI offers two modes, which is just a split of the catalog by how many
 // characters a page draws: "single" needs one photo, "multi" needs two.
-const soloPages = Object.values(PAGES).filter((p) => characterCount(p) === 1);
+//
+// LOCAL-ONLY TRIM: "workshop" is excluded here — two solo scenes are enough
+// for pipeline iteration on this surface. This filters homepage_local's OWN
+// page list only; catalog.ts (PAGES/BOOKS) is untouched, so production
+// (homepage/), the CLI, and the demo-book storyId all still have all three.
+const LOCAL_EXCLUDED_SOLO_PAGES = new Set(["workshop"]);
+const soloPages = Object.values(PAGES).filter(
+  (p) => characterCount(p) === 1 && !LOCAL_EXCLUDED_SOLO_PAGES.has(p.id),
+);
 const duoPages = Object.values(PAGES).filter((p) => characterCount(p) > 1);
 
 const DEFAULT_ESTIMATE_SECONDS = 120;
@@ -81,16 +89,26 @@ function decodePhoto(uri: string): { buf: Buffer; ext: "png" | "jpeg" } {
  * character count, so the server doesn't need to know the difference.
  */
 async function runPages(job: Job, photoUris: string[]): Promise<void> {
+  console.log(`[homepage_local] job ${job.id}: starting ${job.keys.length} page(s): ${job.keys.join(", ")}`);
+  const jobStarted = Date.now();
   // Photos map to the drawn characters left-to-right, same convention as the CLI.
   const characters: CharacterInput[] = photoUris.map((uri, i) => ({ slot: `child_${i + 1}`, photoUrl: uri }));
   await mapWithConcurrency(job.keys, CONCURRENCY, async (key) => {
     const started = Date.now();
     const secs = () => Math.round((Date.now() - started) / 1000);
+    console.log(`[homepage_local] job ${job.id}: page "${key}" started`);
     emit(job, { type: "scene-start", key });
     try {
+      let stageStarted = Date.now();
       const out = await personalizePage(getPage(key), characters, {
-        onStage: (stage) => { emit(job, { type: "stage", key, stage }); },
+        onStage: (stage) => {
+          const now = Date.now();
+          console.log(`[homepage_local] job ${job.id}: page "${key}" stage "${stage}" finished in ${now - stageStarted}ms`);
+          stageStarted = now;
+          emit(job, { type: "stage", key, stage });
+        },
       });
+      console.log(`[homepage_local] job ${job.id}: page "${key}" DONE in ${secs()}s`);
       emit(job, { type: "scene-done", key, image: dataUri(out), seconds: secs() });
     } catch (err) {
       // Isolate the failure to THIS page: log the real cause to the terminal and
@@ -98,10 +116,11 @@ async function runPages(job: Job, photoUris: string[]): Promise<void> {
       // rejected the whole job (mapWithConcurrency is fail-fast) and the UI blanked
       // every still-running page as "stopped" — which is exactly how a single
       // scene could "fail to display" with no visible reason.
-      console.error(`[homepage_local] page "${key}" failed after ${secs()}s:`, err);
+      console.error(`[homepage_local] job ${job.id}: page "${key}" FAILED after ${secs()}s:`, err);
       emit(job, { type: "scene-error", key, message: (err as Error).message, seconds: secs() });
     }
   });
+  console.log(`[homepage_local] job ${job.id}: ALL pages settled, total ${Date.now() - jobStarted}ms`);
 }
 
 const app = Fastify({ bodyLimit: 40 * 1024 * 1024, logger: false });
@@ -140,21 +159,27 @@ app.post("/api/run", async (req, reply) => {
   try {
     await Promise.all(decoded.map((d) => validatePhotoBuffer(d.buf)));
   } catch (e) {
-    if (e instanceof ValidationError) return reply.code(400).send({ error: e.message });
+    if (e instanceof ValidationError) {
+      console.log(`[homepage_local] photo validation rejected: ${e.message}`);
+      return reply.code(400).send({ error: e.message });
+    }
     throw e;
   }
 
   const keys = (mode === "single" ? soloPages : duoPages).map((p) => p.id);
   const job: Job = { id: Math.random().toString(36).slice(2, 10), mode, keys, events: [], done: false, listeners: [] };
   jobs.set(job.id, job);
+  console.log(`[homepage_local] job ${job.id} created (mode: ${mode}, pages: ${keys.join(", ")})`);
 
   // Fire and forget — the browser follows progress over SSE.
   void (async () => {
     try {
       await runPages(job, photos);
+      console.log(`[homepage_local] job ${job.id}: done`);
       emit(job, { type: "done" });
     } catch (e) {
       job.error = (e as Error).message;
+      console.error(`[homepage_local] job ${job.id}: FAILED:`, job.error);
       emit(job, { type: "error", message: job.error });
     } finally {
       job.done = true;
