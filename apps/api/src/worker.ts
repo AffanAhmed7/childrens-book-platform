@@ -3,7 +3,7 @@ import { createRedisConnection } from "./redis";
 import { PIPELINE_QUEUE_NAME, type PipelineJobData } from "./queue";
 import { prisma } from "./db";
 import { publishStatus } from "./status-events";
-import { STEP_MESSAGES } from "./messages";
+import { STEP_MESSAGES, STAGE_MESSAGES } from "./messages";
 import type { CharacterInput, PipelineStep } from "./pipeline/types";
 import { validatePhoto } from "./pipeline/validate";
 import { personalizePage } from "./pipeline/personalize";
@@ -82,7 +82,11 @@ async function processJob(job: Job<PipelineJobData>): Promise<void> {
       // Never pay twice for the same page: a retried job, or a "full" run after
       // a preview, reuses whatever is already rendered.
       if (await objectExists(key)) return;
-      const finished = await personalizePage(page, characters);
+      await publishStatus(sessionId, { type: "status", step: "render", page: page.id, message: "Starting…" });
+      const finished = await personalizePage(page, characters, {
+        onStage: (stage) =>
+          publishStatus(sessionId, { type: "status", step: "render", page: page.id, stage, message: STAGE_MESSAGES[stage] }),
+      });
       await putObject(key, finished, "image/png");
     }),
   );

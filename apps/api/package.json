@@ -11,6 +11,7 @@
     "start": "tsx src/index.ts",
     "personalize": "tsx demo/personalize.mts",
     "homepage": "tsx homepage/server.mts",
+    "homepage:local": "tsx homepage_local/server.mts",
     "bench:swap": "tsx demo/bench-swap.mts",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "prisma:generate": "prisma generate",

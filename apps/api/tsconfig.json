@@ -19,7 +19,7 @@
   //
   // noEmit because nothing compiles this: dev, start, the CLI and the homepage
   // server all run straight off tsx.
-  "include": ["src", "demo", "homepage"],
+  "include": ["src", "demo", "homepage", "homepage_local"],
   // Generated run output, gitignored and overwritten in place. Any scratch
   // script that lands there is not part of the codebase.
   "exclude": ["demo/output"]

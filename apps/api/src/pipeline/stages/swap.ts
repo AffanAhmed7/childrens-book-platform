@@ -33,13 +33,10 @@ import { env } from "../../env";
 // Pinned: the version-based /predictions endpoint requires it, and it stops
 // behaviour drifting if the owner pushes an update.
 //
-// EXPERIMENT (feat/faceswap-gpu-model): swapped from codeplugtech/face-swap
-// (278a81e7…, CPU, ~55-90s, ~$0.006) to ddvinh1/face-swap-gpu — an InsightFace
-// inswapper variant that runs on a T4 GPU at ~1s and ~$0.0002/call. Same input
-// contract (input_image = target artwork, swap_image = child photo), so this is a
-// drop-in version bump. NOTE: it also exposes an `enhance` (GFPGAN) flag, left OFF
-// so the pipeline's own restore stage still owns enhancement — keeping everything
-// downstream identical.
+// Back to ddvinh1/face-swap-gpu (~1s warm/22s cold, ~$0.0002/call) from
+// codeplugtech/face-swap (CPU, ~55-90s, ~$0.006/call) at the user's request.
+// Same input contract either way (input_image = target artwork, swap_image =
+// child photo), so this is a plain version-hash swap back.
 const FACE_SWAP_VERSION = "d766886cf43ea2e9821703c392e3d403d2311eb8d013feef924655f9b7e2971d";
 
 // Both backends' face detectors false-negative ("No face found") on some

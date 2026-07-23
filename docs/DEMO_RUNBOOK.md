@@ -53,12 +53,22 @@ takes photos straight from your computer, so it needs nothing in this folder.
 
 ## 2. The homepage (use this in front of a client)
 
+There are now **two** homepages — same UI, different backends. Use this one
+for a client demo: it calls the pipeline directly, in-process, so it needs
+only `REPLICATE_API_TOKEN` and can't be taken down by Postgres/Redis/R2 being
+misconfigured or unreachable — nothing here depends on them.
+
 ```bash
 cd apps/api
-npm run homepage
+npm run homepage:local
 ```
 
-Open **http://localhost:5174**.
+Open **http://localhost:5179**.
+
+(The other one, `npm run homepage` on :5174, drives the REAL production API —
+real sessions, real R2 uploads, a real queued worker job. Use it to verify or
+demo the actual end-to-end product, not for a no-fuss client walkthrough — see
+section 2b. It needs the full `.env`, not just the one token.)
 
 - Pick a tab: *Single character* or *Two characters*.
 - Drop in a photo (JPEG or PNG). Multi mode takes two — **the child first,
@@ -106,6 +116,36 @@ into something you can watch finish.
 It needs a one-time setup and model weights that are not in this repo, so it is
 not the default. If you have it running, a live demo becomes the strong move
 rather than the risky one.
+
+---
+
+## 2b. The real end-to-end product (`homepage`, not `homepage_local`)
+
+Use this to prove the actual product works, not just the pipeline: real
+Postgres sessions, real presigned R2 uploads, a real BullMQ job, a real worker
+— the same code path a paying user's request would take.
+
+```bash
+cd apps/api
+npm run dev          # API + worker, :3001 — this is what actually renders
+npm run homepage     # UI, :5174 — a thin client, no rendering logic of its own
+```
+
+Needs the full `.env`: `DATABASE_URL`, `R2_*`, `REDIS_URL`, `REPLICATE_API_TOKEN`.
+Both processes must be running — the UI alone does nothing without the API.
+
+Progress here comes from two sources: a coarse status line above the grid
+("Checking your photo…", "Building your story pages…") plus live per-page,
+per-stage text on each card ("Repainting the scene…", "Matching the face…",
+etc.) — real telemetry from the worker, not a demo-only effect. Each render
+creates a real session row and real objects in R2; nothing here is cleaned up
+automatically, so repeated testing accumulates test sessions (harmless, but
+worth knowing before checking the database and wondering what they are).
+
+If `:3001` isn't running, or Postgres/Redis/R2 aren't reachable, this homepage
+will hang or error — that's expected; it has no fallback, unlike
+`homepage_local`. Use `homepage_local` when you just want to see the pipeline
+work.
 
 ---
 
@@ -173,11 +213,13 @@ and wait a few minutes. Fall back to section 3.
 model could not read a face. Retry once; if it persists, use a different photo
 (front-facing, well lit). This is the least reliable step in the pipeline.
 
-**Port 5174 already in use** — `set HOMEPAGE_PORT=5180` (Windows) or
-`HOMEPAGE_PORT=5180` (macOS/Linux) before `npm run homepage`.
+**Port 5174 or 5179 already in use** — `set HOMEPAGE_PORT=5180` (Windows) or
+`HOMEPAGE_PORT=5180` (macOS/Linux) before `npm run homepage`; the local-pipeline
+one uses `HOMEPAGE_LOCAL_PORT` instead, before `npm run homepage:local`.
 
-**It hangs with no progress** — check the terminal running `npm run homepage`;
-Replicate errors surface there.
+**It hangs with no progress** — check the terminal running the homepage (and,
+for `npm run homepage`, the terminal running `npm run dev` too — that's the
+process actually doing the rendering); Replicate errors surface there.
 
 ---
 

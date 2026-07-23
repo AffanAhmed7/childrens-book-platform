@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>Personalized Children's Book</title>
+<title>Personalized Children's Book — Local Pipeline</title>
 <style>
   :root {
     --bg: #f6f7fb; --card: #fff; --ink: #0f172a; --muted: #64748b;
@@ -45,7 +45,6 @@
   button.go:disabled { background: #c7d2fe; cursor: not-allowed; }
   .eta { color: var(--muted); font-size: 13.5px; }
   .eta b { color: var(--ink); }
-  .step { color: var(--accent); font-size: 13.5px; font-weight: 600; }
 
   .grid { display: grid; gap: 18px; grid-template-columns: repeat(auto-fit, minmax(285px, 1fr)); }
   .res { border: 1px solid var(--line); border-radius: 11px; overflow: hidden; background: #fff; }
@@ -75,8 +74,8 @@
 </head>
 <body>
 <header>
-  <h1>Personalized Children's Book</h1>
-  <p>Upload a photo. This runs the real product: a session, uploads to R2, a queued render job, and a worker doing the actual work.</p>
+  <h1>Personalized Children's Book — Local Pipeline</h1>
+  <p>Upload a photo. The illustration is repainted as that person, then identity-matched — real pipeline, real output. Runs the pipeline directly, in-process (no Postgres/Redis/R2 needed) — for the real end-to-end product, use the main homepage instead.</p>
 </header>
 
 <main>
@@ -93,7 +92,6 @@
     <div class="slots" id="slots"></div>
     <div class="actions">
       <button class="go" id="go" disabled>Generate</button>
-      <div class="step" id="step"></div>
       <div class="eta" id="eta"></div>
     </div>
   </div>
@@ -107,9 +105,12 @@
 <dialog id="lightbox"><img id="lightboxImg" alt="" /></dialog>
 
 <script>
-const STEP_LABEL = {
-  validate: "Checking your photo…",
-  render: "Building your story pages…",
+const STAGE_LABEL = {
+  repaint: "Repainting the scene…",
+  swap: "Matching the face…",
+  restore: "Blending…",
+  heal: "Cleaning up…",
+  eyes: "Finishing the eyes…",
 };
 const SLOTS = {
   single: [{ id: "a", label: "Photo" }],
@@ -118,18 +119,13 @@ const SLOTS = {
     { id: "b", label: "Photo 2 — the adult" },
   ],
 };
-// Fixed upload-order convention (see src/pipeline/catalog.ts): child photo
-// always first (child_1), regardless of which side any page draws them on.
-const CHARACTER_NAMES = { a: "Child 1", b: "Grown-up" };
 
 let mode = "single";
-const photos = {}; // slot -> { file, dataUrl }
-let scenes = null; // fetched once from /api/scenes: { apiBase, single: {storyId, pages}, multi: {...} }
-
+const photos = {};
 // Per-mode run state, so a run survives switching tabs to look at the other one.
 const runs = {
-  single: { es: null, poll: null, timer: null, eta: "", step: "", live: false, rendered: new Set() },
-  multi: { es: null, poll: null, timer: null, eta: "", step: "", live: false, rendered: new Set() },
+  single: { timer: null, eta: "", live: false, rendered: new Set() },
+  multi: { timer: null, eta: "", live: false, rendered: new Set() },
 };
 const gridFor = (m) => document.getElementById("grid-" + m);
 const anyLive = () => runs.single.live || runs.multi.live;
@@ -152,7 +148,7 @@ function renderSlots() {
     div.innerHTML =
       '<label>' + s.label + '</label>' +
       '<div class="drop" data-slot="' + s.id + '">' +
-        (photos[s.id] ? '<img src="' + photos[s.id].dataUrl + '" alt="">' : '<span>Click or drop a photo<br>JPEG or PNG</span>') +
+        (photos[s.id] ? '<img src="' + photos[s.id] + '" alt="">' : '<span>Click or drop a photo<br>JPEG or PNG</span>') +
       '<input type="file" accept="image/png,image/jpeg"></div>';
     wrap.appendChild(div);
   }
@@ -174,7 +170,7 @@ function renderSlots() {
 function load(slot, file) {
   if (!/^image\/(png|jpeg)$/.test(file.type)) return showError("Please use a JPEG or PNG photo.");
   const r = new FileReader();
-  r.onload = () => { clearError(); photos[slot] = { file, dataUrl: r.result }; renderSlots(); };
+  r.onload = () => { clearError(); photos[slot] = r.result; renderSlots(); };
   r.readAsDataURL(file);
 }
 
@@ -200,76 +196,15 @@ function card(key, forMode) {
   el.innerHTML =
     '<div class="top"><span class="name">' + key.replace(/_/g, " ") + '</span>' +
     '<span class="state">queued</span></div>' +
-    '<div class="bar"><i></i></div>' +
+    '<div class="bar hidden"><i></i></div>' +
     '<div class="body"><div class="wait">Waiting…</div></div>';
   return el;
-}
-
-// Same wave-based estimate the old in-process server used to compute:
-// pages run PAGE_CONCURRENCY-wide, so wall time is roughly the slowest few
-// waves, not the sum of every page.
-const CONCURRENCY = 3;
-function estimateFor(pages) {
-  const times = pages.map((p) => p.estimate).sort((a, b) => b - a);
-  const waves = Math.ceil(times.length / CONCURRENCY);
-  return Math.round(times.slice(0, waves).reduce((a, b) => a + b, 0) * 1.1);
-}
-
-async function ensureScenes() {
-  if (scenes) return scenes;
-  scenes = await fetch("/api/scenes").then((r) => r.json());
-  return scenes;
-}
-
-async function validateAll(need) {
-  for (const id of need) {
-    const res = await fetch("/api/validate", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ photo: photos[id].dataUrl }),
-    }).then((r) => r.json());
-    if (res.error) throw new Error(res.error);
-  }
-}
-
-async function createSession(apiBase, storyId, need) {
-  const characters = need.map((id) => ({ slot: id === "a" ? "child_1" : "child_2", childName: CHARACTER_NAMES[id] }));
-  const res = await fetch(apiBase + "/api/sessions", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ storyId, characters }),
-  });
-  if (!res.ok) throw new Error("Could not create a session (" + res.status + ").");
-  return res.json();
-}
-
-async function uploadCharacter(apiBase, sessionId, characterId, slotId) {
-  const { file } = photos[slotId];
-  const contentType = file.type;
-  const { uploadUrl, objectKey } = await fetch(
-    apiBase + "/api/sessions/" + sessionId + "/characters/" + characterId + "/upload-url",
-    { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ contentType }) },
-  ).then((r) => r.json());
-
-  const put = await fetch(uploadUrl, { method: "PUT", headers: { "Content-Type": contentType }, body: file });
-  if (!put.ok) throw new Error("Photo upload to storage failed (" + put.status + ").");
-
-  // mode:"full" only takes effect on the call that completes the LAST
-  // character's upload (that's the one which actually triggers enqueueing),
-  // but it's harmless to send every time. Requesting "full" up front means
-  // one job renders every page concurrently, instead of the default
-  // preview-then-render-full sequence, which is two separate BullMQ jobs run
-  // one after another (worker concurrency defaults to 1) — that took roughly
-  // twice as long for no benefit here, since this UI always shows every page.
-  await fetch(
-    apiBase + "/api/sessions/" + sessionId + "/characters/" + characterId + "/upload-confirm",
-    { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ objectKey, mode: "full" }) },
-  );
 }
 
 async function run() {
   clearError();
   const need = SLOTS[mode].map((s) => s.id);
+  const payload = { mode, photos: need.map((id) => photos[id]) };
 
   const runMode = mode; // capture: the user may switch tabs while this runs
   const st = runs[runMode];
@@ -279,27 +214,26 @@ async function run() {
   const grid = gridFor(runMode);
   grid.innerHTML = "";
 
-  let sc;
+  let res;
   try {
-    sc = await ensureScenes();
-  } catch {
+    res = await fetch("/api/run", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    }).then((r) => r.json());
+  } catch (e) {
     st.live = false; syncGo();
-    return showError("Could not reach the homepage server. Is it still running?");
+    return showError("Could not reach the server. Is it still running?");
   }
-  const apiBase = sc.apiBase;
-  const modeInfo = sc[runMode];
-  const keys = modeInfo.pages.map((p) => p.key);
-  for (const k of keys) grid.appendChild(card(k, runMode));
+  if (res.error) { st.live = false; syncGo(); return showError(res.error); }
+
+  for (const k of res.keys) grid.appendChild(card(k, runMode));
 
   const started = Date.now();
-  const est = estimateFor(modeInfo.pages);
+  const est = res.estimateSeconds;
   const setEta = (html) => {
     st.eta = html;
     if (mode === runMode) $("eta").innerHTML = html;
-  };
-  const setStep = (text) => {
-    st.step = text;
-    if (mode === runMode) $("step").textContent = text;
   };
   clearInterval(st.timer);
   st.timer = setInterval(() => {
@@ -309,154 +243,97 @@ async function run() {
       (left > 0 ? fmt(left) : "any moment") + "</b> remaining");
   }, 1000);
   setEta("Estimated <b>" + fmt(est) + "</b>");
-  setStep("");
 
-  const stop = () => {
-    clearInterval(st.timer);
-    clearInterval(st.poll);
-    if (st.es) st.es.close();
-    st.es = null;
-    st.poll = null;
-  };
   const finish = (html) => {
-    stop();
+    clearInterval(st.timer);
     st.live = false;
     setEta(html);
-    setStep("");
     syncGo();
   };
-  const markRemainingFailed = (message) => {
-    for (const k of keys) {
-      if (st.rendered.has(k)) continue;
-      st.rendered.add(k);
-      const el = document.getElementById("res-" + runMode + "-" + k);
-      if (!el) continue;
+
+  // The server buffers every event and replays it to a new connection, so a
+  // dropped stream can simply be reopened — without this the UI silently froze
+  // on a blip while the run carried on to completion server-side.
+  let src = null;
+  let closed = false;
+  let retries = 0;
+
+  const stop = () => { closed = true; if (src) src.close(); };
+
+  const handle = (e) => {
+    const el = document.getElementById("res-" + runMode + "-" + e.key);
+
+    if (e.type === "scene-start" && el) {
+      el.querySelector(".state").textContent = "starting…";
+      el.querySelector(".bar").classList.remove("hidden");
+    }
+    if (e.type === "stage" && el) {
+      el.querySelector(".state").textContent = STAGE_LABEL[e.stage] || e.stage;
+    }
+    // Replayed events repeat after a reconnect — render each scene only once.
+    if (e.type === "scene-done" && el && !st.rendered.has(e.key)) {
+      st.rendered.add(e.key);
       el.querySelector(".bar").classList.add("hidden");
       const badge = el.querySelector(".state");
-      badge.textContent = "stopped";
+      badge.textContent = "done in " + fmt(e.seconds);
+      badge.className = "state ok";
+      el.querySelector(".body").innerHTML = '<img src="' + e.image + '" alt="">';
+      el.querySelector(".body img").addEventListener("click", () => {
+        $("lightboxImg").src = e.image;
+        $("lightbox").showModal();
+      });
+      const a = document.createElement("a");
+      a.className = "dl"; a.href = e.image; a.download = e.key + ".png";
+      a.textContent = "Download full size";
+      el.appendChild(a);
+    }
+    // One page failed but the others keep going — show the reason on that card
+    // instead of blanking it. textContent, not innerHTML, so the message can't inject.
+    if (e.type === "scene-error" && el && !st.rendered.has(e.key)) {
+      st.rendered.add(e.key);
+      el.querySelector(".bar").classList.add("hidden");
+      const badge = el.querySelector(".state");
+      badge.textContent = "failed in " + fmt(e.seconds || 0);
       badge.className = "state bad";
       const body = el.querySelector(".body");
       body.innerHTML = "";
       const div = document.createElement("div");
       div.className = "wait";
-      div.textContent = message;
+      div.textContent = e.message || "This scene failed.";
       body.appendChild(div);
     }
-  };
-
-  // Polling /pages is the SOLE source of truth for "are we actually done" —
-  // deliberately NOT the SSE "done" event. Uploading the last photo
-  // auto-enqueues a "preview" job (renders just the flagged preview page),
-  // and this code ALSO calls render-full right after (renders every page,
-  // worker skips whatever the preview job already finished). That's two
-  // BullMQ jobs for one session, but the production status route was built
-  // for one job per session: it force-closes the SSE stream after the FIRST
-  // done/error it sees, which is the small preview job — treating that as
-  // "finished" left every other page stuck showing "queued" forever with the
-  // real render-full job still working server-side. Checking "every expected
-  // page id is ready" instead of trusting a single SSE event is what actually
-  // reflects completion here.
-  const pollPages = async (sessionId) => {
-    let res;
-    try {
-      res = await fetch(apiBase + "/api/sessions/" + sessionId + "/pages").then((r) => r.json());
-    } catch {
-      return;
-    }
-    for (const p of res.pages || []) {
-      if (!p.ready || st.rendered.has(p.id)) continue;
-      const el = document.getElementById("res-" + runMode + "-" + p.id);
-      if (!el) continue;
-      st.rendered.add(p.id);
-      el.querySelector(".bar").classList.add("hidden");
-      const badge = el.querySelector(".state");
-      badge.textContent = "done";
-      badge.className = "state ok";
-      el.querySelector(".body").innerHTML = '<img src="' + p.url + '" alt="">';
-      el.querySelector(".body img").addEventListener("click", () => {
-        $("lightboxImg").src = p.url;
-        $("lightbox").showModal();
+    if (e.type === "error") {
+      showError(e.message);
+      gridFor(runMode).querySelectorAll(".res .state").forEach((s) => {
+        if (!s.classList.contains("ok")) { s.textContent = "stopped"; s.className = "state bad"; }
       });
-      const a = document.createElement("a");
-      a.className = "dl"; a.href = p.url; a.download = p.id + ".png";
-      a.textContent = "Download full size";
-      el.appendChild(a);
+      gridFor(runMode).querySelectorAll(".bar").forEach((b) => b.classList.add("hidden"));
+      stop();
+      finish("Stopped after <b>" + fmt(Math.round((Date.now() - started) / 1000)) + "</b>");
     }
-    if (keys.every((k) => st.rendered.has(k))) {
+    if (e.type === "done") {
+      stop();
       finish("Finished in <b>" + fmt(Math.round((Date.now() - started) / 1000)) + "</b>");
     }
   };
 
-  // Safety net: if something goes wrong server-side with no SSE error either
-  // (e.g. the worker process dies), don't poll forever — give up generously
-  // past the estimate and show whatever didn't make it as failed.
-  const giveUpAt = started + Math.max(est * 3, 300) * 1000;
-
-  try {
-    await validateAll(need);
-
-    const session = await createSession(apiBase, modeInfo.storyId, need);
-    for (const c of session.characters) {
-      const slotId = c.slot === "child_1" ? "a" : "b";
-      await uploadCharacter(apiBase, session.sessionId, c.characterId, slotId);
-    }
-    // uploadCharacter already requested mode:"full" on upload-confirm, so the
-    // one auto-enqueued job renders every page — no separate render-full call.
-
-    st.poll = setInterval(() => {
-      if (Date.now() > giveUpAt) {
-        markRemainingFailed("Timed out waiting for this page.");
-        finish("Stopped after <b>" + fmt(Math.round((Date.now() - started) / 1000)) + "</b>");
+  const connect = () => {
+    src = new EventSource("/api/run/" + res.jobId + "/events");
+    src.onmessage = (m) => { retries = 0; handle(JSON.parse(m.data)); };
+    src.onerror = () => {
+      if (src) src.close();
+      if (closed) return;
+      // A finished job's stream is closed by the server, which also lands here.
+      // Retry a few times; the replay tells us if it actually completed.
+      if (retries >= 6) {
+        finish("Connection lost — the run may still be finishing. Check the terminal.");
         return;
       }
-      pollPages(session.sessionId);
-    }, 3000);
-    pollPages(session.sessionId);
-
-    st.es = new EventSource(apiBase + "/api/sessions/" + session.sessionId + "/status");
-    st.es.addEventListener("status", (m) => {
-      const e = JSON.parse(m.data);
-      if (e.page) {
-        // Page-specific progress (which page started, which pipeline stage
-        // it's on) — route it onto that page's own card instead of the
-        // single line above the grid. Skip if the card already shows "done":
-        // a late-arriving stage event for an already-finished page (SSE and
-        // the /pages poll aren't ordered against each other) shouldn't
-        // un-finish it.
-        if (st.rendered.has(e.page)) return;
-        const el = document.getElementById("res-" + runMode + "-" + e.page);
-        if (el) el.querySelector(".state").textContent = e.message;
-      } else {
-        setStep(STEP_LABEL[e.step] || e.step);
-      }
-    });
-    // Deliberately NOT finishing the run here — see the pollPages comment
-    // above. This event just means SOME job for this session finished; an
-    // extra immediate poll makes that page's result appear a little sooner.
-    st.es.addEventListener("done", () => { pollPages(session.sessionId); });
-    st.es.addEventListener("error", (m) => {
-      const e = JSON.parse(m.data);
-      showError(e.message || "The render failed.");
-      // A job-level error doesn't necessarily doom every page (the other
-      // enqueued job may still be working), so keep polling rather than
-      // stopping outright — the give-up timeout above is the actual backstop.
-    });
-    st.es.onerror = () => {
-      // EventSource auto-retries on a network blip by itself; polling
-      // independently already covers completion, so nothing to do here.
+      retries += 1;
+      setTimeout(connect, Math.min(1000 * retries, 5000));
     };
-  } catch (e) {
-    stop();
-    st.live = false;
-    // A thrown error here (session creation, upload, or the direct R2 PUT —
-    // e.g. an R2 bucket CORS rejection) used to leave every card silently
-    // stuck on "queued" forever with only a small banner at the top as any
-    // sign something failed. Mark the cards too, so it's unmissable.
-    markRemainingFailed(e.message || "This scene failed.");
-    setStep("");
-    syncGo();
-    return showError(e.message || "Something went wrong.");
-  }
+  };
+  connect();
 }
 
 document.querySelectorAll(".tab").forEach((t) => {
@@ -473,7 +350,6 @@ document.querySelectorAll(".tab").forEach((t) => {
     gridFor("single").classList.toggle("hidden", mode !== "single");
     gridFor("multi").classList.toggle("hidden", mode !== "multi");
     $("eta").innerHTML = runs[mode].eta || "";
-    $("step").textContent = runs[mode].step || "";
     clearError();
     renderSlots();
   });
@@ -482,7 +358,6 @@ document.querySelectorAll(".tab").forEach((t) => {
 $("go").addEventListener("click", run);
 $("lightbox").addEventListener("click", () => $("lightbox").close());
 renderSlots();
-ensureScenes().catch(() => showError("Could not reach the homepage server. Is it still running?"));
 </script>
 </body>
 </html>

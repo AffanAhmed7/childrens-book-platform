@@ -19,6 +19,8 @@
 //                     so it carries likeness on its own; this trades identity
 //                     sharpness for guaranteed freedom from swap artifacts.
 //                     Writes to <page>.noswap.png.
+//   --no-eyes         skip the eyes stage (paints the repaint's eyes back over
+//                     the swap's). Writes to <page>.noeyes.png.
 //
 // Photos map to the drawn characters in LEFT-TO-RIGHT order UNLESS the page sets
 // `slots` in catalog.ts, in which case that order wins instead — some pages draw
@@ -58,11 +60,12 @@ const outDir = flag("--out") ?? "demo/output";
 const debug = argv.includes("--debug");
 const lite = argv.includes("--lite");
 const noSwap = argv.includes("--no-swap");
+const noEyes = argv.includes("--no-eyes");
 const detectOnly = argv.includes("--detect-only");
 const repaintModel: RepaintModel = lite ? "nano-banana-2-lite" : "nano-banana";
 
 if (photoPaths.length === 0) {
-  console.error("usage: npm run personalize -- <photo> [photo2 ...] [--page <id|all>] [--out <dir>] [--detect-only] [--debug] [--lite] [--no-swap]");
+  console.error("usage: npm run personalize -- <photo> [photo2 ...] [--page <id|all>] [--out <dir>] [--detect-only] [--debug] [--lite] [--no-swap] [--no-eyes]");
   console.error(`pages: ${Object.keys(PAGES).join(", ")}, all`);
   process.exit(1);
 }
@@ -78,7 +81,7 @@ const characters: CharacterInput[] = await Promise.all(
   })),
 );
 
-const suffix = `${lite ? ".lite" : ""}${noSwap ? ".noswap" : ""}`;
+const suffix = `${lite ? ".lite" : ""}${noSwap ? ".noswap" : ""}${noEyes ? ".noeyes" : ""}`;
 
 /** Free preflight: what the crops would be, without spending anything. */
 async function detect(page: Page): Promise<void> {
@@ -141,6 +144,7 @@ async function render(page: Page): Promise<void> {
   const out = await personalizePage(page, characters, {
     repaintModel,
     swap: !noSwap,
+    eyeFix: !noEyes,
     onStage: async (stage, buf) => {
       const n = (stageCounts.get(stage) ?? 0) + 1;
       stageCounts.set(stage, n);

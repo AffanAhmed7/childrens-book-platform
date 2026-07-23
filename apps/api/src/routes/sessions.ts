@@ -46,7 +46,19 @@ const UploadUrlResponse = Type.Object({
   objectKey: Type.String(),
 });
 
-const UploadConfirmBody = Type.Object({ objectKey: Type.String({ minLength: 1 }) });
+const UploadConfirmBody = Type.Object({
+  objectKey: Type.String({ minLength: 1 }),
+  // Which render to auto-enqueue once every character has uploaded. Defaults
+  // to "preview" (the real product's normal flow: show a couple of pages
+  // free, render the rest via POST .../render-full after purchase). A caller
+  // that already knows it wants the whole book right away (e.g. the
+  // homepage demo, which shows every page at once) can pass "full" here
+  // instead of enqueueing a preview job and then immediately enqueueing a
+  // second full one behind it — two sequential BullMQ jobs (WORKER_CONCURRENCY
+  // defaults to 1) took roughly twice as long as one job rendering every page
+  // concurrently.
+  mode: Type.Optional(Type.Union([Type.Literal("preview"), Type.Literal("full")])),
+});
 const UploadConfirmResponse = Type.Object({ ok: Type.Literal(true), allUploaded: Type.Boolean() });
 
 const CharacterView = Type.Object({
@@ -177,7 +189,7 @@ export async function registerSessionRoutes(app: FastifyInstance) {
     },
     async (request, reply) => {
       const { id, characterId } = request.params;
-      const { objectKey } = request.body;
+      const { objectKey, mode } = request.body;
 
       const character = await prisma.character.findFirst({ where: { id: characterId, sessionId: id } });
       if (!character) {
@@ -193,11 +205,13 @@ export async function registerSessionRoutes(app: FastifyInstance) {
         await prisma.session.update({ where: { id }, data: { status: "uploaded" } });
 
         if (env.REDIS_URL) {
-          // Only the preview pages are rendered up front — the rest of the book
-          // is rendered by POST /render-full once it's bought.
+          // Default "preview": only the preview pages are rendered up front,
+          // the rest of the book is rendered by POST /render-full once it's
+          // bought. A caller can pass mode:"full" to skip straight to
+          // rendering everything in this one job instead.
           const job = await getPipelineQueue().add(
             "process",
-            { sessionId: id, mode: "preview" },
+            { sessionId: id, mode: mode ?? "preview" },
             { attempts: 1, removeOnComplete: true, removeOnFail: false },
           );
           await prisma.character.updateMany({ where: { sessionId: id }, data: { jobId: job.id } });
@@ -309,11 +323,27 @@ export async function registerSessionRoutes(app: FastifyInstance) {
           .send({ message: "Live status streaming is not configured yet (REDIS_URL missing)." });
       }
 
+      // @fastify/cors stages Access-Control-Allow-Origin via an onRequest hook
+      // using reply.header(), which only ever gets flushed by Fastify's OWN
+      // reply.send() pipeline. reply.hijack() + reply.raw.writeHead() below
+      // bypasses that pipeline entirely and writes straight to the raw Node
+      // response — so the CORS header was silently never sent on this route,
+      // even though every other endpoint has it. A cross-origin browser
+      // client (the homepage on a different port) then fails CORS validation
+      // and EventSource goes straight to a terminal CLOSED state with no
+      // retry — confirmed live: the exact same request via a same-origin
+      // Node fetch (not subject to CORS) received real events fine, proving
+      // the server side was always working and only the browser was ever
+      // rejecting it. Must set the header explicitly here.
+      const origin = request.headers.origin;
+      const allowedOrigin = origin && env.CORS_ORIGIN.includes(origin) ? origin : undefined;
+
       reply.hijack();
       reply.raw.writeHead(200, {
         "Content-Type": "text/event-stream",
         "Cache-Control": "no-cache",
         Connection: "keep-alive",
+        ...(allowedOrigin ? { "Access-Control-Allow-Origin": allowedOrigin, Vary: "Origin" } : {}),
       });
 
       const send = (eventName: string, data: unknown) => {
@@ -330,12 +360,12 @@ export async function registerSessionRoutes(app: FastifyInstance) {
 
       const unsubscribe = subscribeStatus(id, (event) => {
         if (event.type === "status") {
-          send("status", { step: event.step, slot: event.slot, message: event.message });
+          send("status", { step: event.step, slot: event.slot, page: event.page, stage: event.stage, message: event.message });
         } else if (event.type === "done") {
           send("done", { previewUrl: event.previewUrl });
           cleanup();
         } else if (event.type === "error") {
-          send("error", { step: event.step, slot: event.slot, message: event.message });
+          send("error", { step: event.step, slot: event.slot, page: event.page, message: event.message });
           cleanup();
         }
       });

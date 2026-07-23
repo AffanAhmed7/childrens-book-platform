@@ -127,10 +127,23 @@ finished result is blended back** and cannot affect reliability. Fix cosmetic se
 | POST | `/api/sessions` | create a session with one or more characters (`storyId`, `characters: [{slot, childName}]`) |
 | GET | `/api/sessions/:id` | inspect a session and its characters |
 | POST | `/api/sessions/:id/characters/:characterId/upload-url` | presigned R2 PUT URL for that character's photo |
-| POST | `/api/sessions/:id/characters/:characterId/upload-confirm` | record the upload; enqueues the pipeline (mode `"preview"`) once *every* character has uploaded |
+| POST | `/api/sessions/:id/characters/:characterId/upload-confirm` | record the upload; once *every* character has uploaded, enqueues the pipeline — mode `"preview"` (default) or `"full"` if the body sets `mode: "full"` |
 | POST | `/api/sessions/:id/render-full` | enqueues the rest of the book (mode `"full"`); pages already rendered for the preview are reused, not re-paid for |
-| GET | `/api/sessions/:id/pages` | every page in the book with render status and a signed URL if ready |
-| GET | `/api/sessions/:id/status` | **SSE** — live progress per character/step, plus the final `done`/`error` event |
+| GET | `/api/sessions/:id/pages` | every page in the book with render status and a signed URL if ready — the reliable source of truth for "is this done," independent of the SSE stream |
+| GET | `/api/sessions/:id/status` | **SSE** — live progress per character/step; `render`-step events also carry `page` and `stage` (`repaint`/`swap`/`restore`/`heal`/`eyes`) so a client can show per-page, per-stage text, not just one line for the whole batch — plus the final `done`/`error` event |
+
+**`mode: "full"` on upload-confirm exists for a reason worth knowing:** the default flow is
+preview-then-render-full, which is *two* sequential BullMQ jobs (worker concurrency defaults to
+1) — fine for the real product (preview now, buy later), but if a caller wants the whole book
+immediately anyway, two sequential jobs take roughly twice as long as one job rendering every
+page concurrently. Pass `mode: "full"` on upload-confirm to skip straight to the single-job path.
+
+**The SSE `done`/`error` event is per-job, not per-session** — if a caller enqueues more than one
+job for the same session (the preview-then-full sequence does exactly this by default), the
+route closes the stream after the *first* job's `done`/`error`, even if another job for that
+same session is still running. A client that cares about "is everything actually finished" should
+treat `GET .../pages` (every expected page's `ready` flag) as the source of truth, not the SSE
+`done` event — `homepage/`'s client code does this for exactly that reason.
 
 ## Production job flow
 
@@ -155,12 +168,24 @@ face detection (`replicate.ts`'s `noFaceRetries`).
 
 ## Homepage and demo harness
 
-`homepage/` (the client-facing browser UI) and `demo/` (CLI + benchmark + QA images) both run
-the identical engine with no Postgres, Redis, BullMQ or S3 — so a client demo can't be taken
-down by infrastructure that has nothing to do with what's being shown.
+**Two homepages now, same UI, different backends:**
+
+- `homepage/` is a **thin client of the real production API** — sessions, presigned R2
+  uploads, a real BullMQ job, the real worker. Needs the full stack running (`npm run dev` for
+  the API+worker, plus Postgres/Redis/R2 all reachable). This is what actually proves the
+  product works end to end, not just the engine.
+- `homepage_local/` is the *original* design: calls `personalizePage()` directly, in-process,
+  with no Postgres/Redis/BullMQ/S3 dependency at all — so a client demo can't be taken down by
+  infrastructure that has nothing to do with what's being shown. Use this for a no-fuss demo or
+  fast local pipeline/prompt iteration.
+
+`demo/` (CLI + benchmark + QA images) also runs the identical engine in-process, same as
+`homepage_local/`.
 
 ```bash
-npm run homepage                          # browser UI on :5174, live per-stage progress
+npm run dev                               # API + worker, :3001 (only needed for `homepage`)
+npm run homepage                          # real end-to-end product, :5174
+npm run homepage:local                    # pipeline only, no infra, :5179
 npm run personalize -- kid.jpg            # CLI, every page
 npm run personalize -- kid.jpg dad.png --page newtemp
 npm run personalize -- kid.jpg dad.png --detect-only   # FREE preflight, no API calls
@@ -181,7 +206,41 @@ Test scripts against the real API:
 **Verified end-to-end through the real API:** a full multi-character session — create → upload
 two different children's photos → confirm → SSE through `validate`/`render` → `done` —
 producing correct per-character results on both a solo and a two-character page. The browser
-homepage has been verified the same way from a fresh clone.
+homepage has been verified the same way from a fresh clone, including through `homepage/` (the
+real production-backed one) end to end via an actual browser render.
+
+**Four real bugs found and fixed wiring `homepage/` up as a genuine client of this API** — worth
+knowing since they're the kind that only show up under real cross-origin browser use, not
+server-to-server testing:
+
+1. **The SSE `/status` route silently had no CORS header.** `@fastify/cors` stages
+   `Access-Control-Allow-Origin` via an `onRequest` hook using `reply.header()`, which is only
+   ever flushed by Fastify's own `reply.send()` pipeline. This route calls `reply.hijack()` +
+   `reply.raw.writeHead()` to stream directly, bypassing that pipeline — so the header was never
+   sent, and a cross-origin `EventSource` failed CORS validation and went straight to a terminal
+   `CLOSED` state with no retry. Same-origin/server-to-server calls never see this, which is why
+   it went unnoticed. Fixed by setting the header explicitly in the `writeHead()` call, based on
+   `request.headers.origin` matched against `env.CORS_ORIGIN`.
+2. **One Redis connection per SSE subscriber, with no pooling.** `subscribeStatus` used to call
+   `createRedisConnection()` fresh on every request; combined with a browser's automatic
+   `EventSource` reconnect-on-drop, a burst of reconnects tripped Upstash's connection limits —
+   observed live as `ECONNRESET` and even `getaddrinfo ENOTFOUND` for the Redis host, which
+   looked exactly like a Redis outage but wasn't (a single plain connection worked immediately
+   after). Fixed with one shared, long-lived `PSUBSCRIBE session:*` connection fanning out to an
+   in-process `EventEmitter` — Redis connection count is now O(1) in concurrent viewers, not
+   O(n), and ioredis auto-resubscribes this connection on a genuine reconnect.
+3. **An unhandled promise rejection could crash the whole process.** `subscribeStatus` called
+   `subscriber.subscribe(...)` with `void` and no `.catch()`; if the connection closed before
+   that command completed (exactly what a fast reconnect/disconnect cycle produces), the
+   rejection was unhandled, and Node crashes the process on an unhandled rejection by default —
+   taking the BullMQ worker down with it, since they share a process. This is what made a render
+   look like it "jumped straight from queued to done" with no progress text: the render kept
+   going (or had already written pages to R2), but the process streaming progress had died.
+4. **A double-job architecture made solo-mode renders ~2x slower than necessary.** Uploading the
+   last photo auto-enqueues a `"preview"` job; a naive client that also wants the whole book
+   right away and separately calls `render-full` gets *two* sequential BullMQ jobs (worker
+   concurrency defaults to 1), not one. `upload-confirm`'s new `mode: "full"` field lets a caller
+   skip straight to one job rendering every page concurrently instead.
 
 **Open risks, in priority order:**
 
