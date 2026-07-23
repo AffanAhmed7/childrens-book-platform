@@ -1,6 +1,8 @@
+import { randomUUID } from "node:crypto";
 import { runReplicate, fetchToBuffer, ReplicateError } from "../replicate";
 import { dataUri } from "../dataUri";
 import { env } from "../../env";
+import { createRedisConnection } from "../../redis";
 
 // STAGE 2 of 5 — sharpen identity to exactly this child.
 //
@@ -8,7 +10,10 @@ import { env } from "../../env";
 //
 // TWO BACKENDS, one contract. `SWAP_BACKEND` selects:
 //
-//   replicate (default) — the hosted ddvinh1/face-swap-gpu model.
+//   replicate (default) — hosted. Tries the codeplugtech/face-swap DEPLOYMENT
+//                         (dedicated T4 GPU) first, falls back to the plain
+//                         ddvinh1/face-swap-gpu model call on any failure — see
+//                         swapViaReplicate below.
 //   local               — services/faceswap, the same inswapper model self-hosted.
 //                         Errors if the service is down (strict; for testing).
 //   auto                — try local first, fall back to hosted on ANY local
@@ -30,14 +35,117 @@ import { env } from "../../env";
 // face-swap tools (roop, facefusion, SimSwap) derive from the same model and
 // inherit the restriction. This must be resolved before the product is sold.
 
-// Pinned: the version-based /predictions endpoint requires it, and it stops
-// behaviour drifting if the owner pushes an update.
+// PRIMARY (2026-07-23): a Replicate DEPLOYMENT — codeplugtech/face-swap
+// (the same model previously run generically on CPU, ~55-90s) now pinned to a
+// dedicated Nvidia T4 GPU instance, owned by the "ihtesham" Replicate org.
+// Deployments use their own endpoint shape (deployments/<owner>/<name>/
+// predictions, no `version` field — the deployment itself pins the version)
+// and their own token (REPLICATE_API_TOKEN was switched globally to this
+// org's token at the user's explicit instruction — repaint/restore now
+// authenticate as this account too).
+const FACE_SWAP_DEPLOYMENT_OWNER = "ihtesham";
+const FACE_SWAP_DEPLOYMENT_NAME = "face-swap";
+
+// FALLBACK: the plain (non-deployment) model call this project used right
+// before the deployment above — ddvinh1/face-swap-gpu, ~1s warm/22s cold,
+// ~$0.0002/call. Pinned to a version hash because the version-based
+// /predictions endpoint requires one, and pinning stops behaviour drifting if
+// the owner pushes an update. Used automatically if the deployment call
+// fails for any reason (see swapViaReplicate) — e.g. the deployment's single
+// max instance is still cold-starting, or Replicate has an issue scoped to
+// deployments specifically. Same input contract either way (input_image =
+// target artwork, swap_image = child photo).
+const FACE_SWAP_FALLBACK_VERSION = "d766886cf43ea2e9821703c392e3d403d2311eb8d013feef924655f9b7e2971d";
+
+// THROTTLE for the deployment specifically (2026-07-24). The deployment is
+// configured with max_instances: 1 (Cloudflare/Replicate dashboard setting,
+// not code) — firing more than one concurrent call at it doesn't parallelize
+// anything, it just contends for the single instance. Confirmed live: doing
+// exactly that produced real 429s from Replicate on the deployment endpoint.
 //
-// Back to ddvinh1/face-swap-gpu (~1s warm/22s cold, ~$0.0002/call) from
-// codeplugtech/face-swap (CPU, ~55-90s, ~$0.006/call) at the user's request.
-// Same input contract either way (input_image = target artwork, swap_image =
-// child photo), so this is a plain version-hash swap back.
-const FACE_SWAP_VERSION = "d766886cf43ea2e9821703c392e3d403d2311eb8d013feef924655f9b7e2971d";
+// This gate limits in-flight deployment calls to DEPLOYMENT_MAX_CONCURRENT
+// (default 1, matching max_instances) and, critically, RELEASES THE INSTANT a
+// call finishes — success or failure — so the next waiting call starts almost
+// immediately (bounded only by the poll interval), rather than idling and
+// risking the single instance scaling back down between requests. A waiter
+// gives up after DEPLOYMENT_LOCK_WAIT_BUDGET_MS and falls straight to the
+// plain model call instead of queueing indefinitely behind a busy or stuck
+// instance — the render pipeline keeps moving either way.
+//
+// Same dual-mode pattern as replicate.ts's rate limiter: Redis-backed (shared
+// across every stage-worker process) when REDIS_URL is set, in-memory
+// fallback otherwise — correct for the CLI/homepage_local, which are always a
+// single process, but can still run swap concurrently across character crops
+// on a multi-character page, so even the in-memory case needs a real gate,
+// not just a comment saying "don't."
+const DEPLOYMENT_MAX_CONCURRENT = Number(process.env.SWAP_DEPLOYMENT_MAX_CONCURRENT ?? "1");
+const DEPLOYMENT_LOCK_KEY = "swap:deployment:concurrency";
+const DEPLOYMENT_LOCK_STALE_MS = 240_000; // safety net only (crashed holder) — normal release is explicit, see above
+const DEPLOYMENT_LOCK_POLL_MS = 300;
+const DEPLOYMENT_LOCK_WAIT_BUDGET_MS = 20_000;
+
+let deploymentGateRedis: ReturnType<typeof createRedisConnection> | undefined;
+function getDeploymentGateRedis() {
+  deploymentGateRedis ??= createRedisConnection();
+  return deploymentGateRedis;
+}
+
+// KEYS[1]=key ARGV[1]=now ARGV[2]=staleAfterMs ARGV[3]=maxConcurrent ARGV[4]=member
+// Same sliding-window-via-sorted-set shape as replicate.ts's rate limiter,
+// verified working there. Returns 1 if a slot was acquired, 0 otherwise.
+const DEPLOYMENT_GATE_ACQUIRE_SCRIPT = `
+  redis.call('ZREMRANGEBYSCORE', KEYS[1], '-inf', tonumber(ARGV[1]) - tonumber(ARGV[2]))
+  local count = redis.call('ZCARD', KEYS[1])
+  if count < tonumber(ARGV[3]) then
+    redis.call('ZADD', KEYS[1], ARGV[1], ARGV[4])
+    redis.call('PEXPIRE', KEYS[1], ARGV[2])
+    return 1
+  end
+  return 0
+`;
+
+let localDeploymentSlotsInUse = 0;
+
+/**
+ * Waits (bounded) for a free deployment slot. Returns a release function on
+ * success, or `null` if the wait budget was exhausted — the caller's job is
+ * to treat `null` as "skip the deployment, use the fallback directly."
+ */
+async function acquireDeploymentSlot(): Promise<(() => Promise<void>) | null> {
+  const deadline = Date.now() + DEPLOYMENT_LOCK_WAIT_BUDGET_MS;
+  for (;;) {
+    if (env.REDIS_URL) {
+      const now = Date.now();
+      const member = `${now}-${randomUUID()}`;
+      const acquired = Number(
+        await getDeploymentGateRedis().eval(
+          DEPLOYMENT_GATE_ACQUIRE_SCRIPT,
+          1,
+          DEPLOYMENT_LOCK_KEY,
+          now,
+          DEPLOYMENT_LOCK_STALE_MS,
+          DEPLOYMENT_MAX_CONCURRENT,
+          member,
+        ),
+      );
+      if (acquired === 1) {
+        return async () => {
+          await getDeploymentGateRedis().zrem(DEPLOYMENT_LOCK_KEY, member);
+        };
+      }
+    } else if (localDeploymentSlotsInUse < DEPLOYMENT_MAX_CONCURRENT) {
+      localDeploymentSlotsInUse += 1;
+      let released = false;
+      return async () => {
+        if (released) return;
+        released = true;
+        localDeploymentSlotsInUse -= 1;
+      };
+    }
+    if (Date.now() >= deadline) return null;
+    await new Promise((r) => setTimeout(r, DEPLOYMENT_LOCK_POLL_MS));
+  }
+}
 
 // Both backends' face detectors false-negative ("No face found") on some
 // target/photo pairs far more than others. Two causes were found and fixed
@@ -104,15 +212,59 @@ async function swapViaLocal(targetBuf: Buffer, photoUri: string): Promise<Buffer
   return Buffer.from(json.image, "base64");
 }
 
-async function swapViaReplicate(targetBuf: Buffer, photoUri: string): Promise<Buffer> {
-  // runReplicate owns the hosted no-face retry loop, so this path passes the
-  // budget straight through rather than double-retrying.
+async function swapViaDeployment(targetBuf: Buffer, photoUri: string): Promise<Buffer> {
   const url = await runReplicate(
-    "predictions",
-    { version: FACE_SWAP_VERSION, input: { input_image: dataUri(targetBuf), swap_image: photoUri } },
+    `deployments/${FACE_SWAP_DEPLOYMENT_OWNER}/${FACE_SWAP_DEPLOYMENT_NAME}/predictions`,
+    { input: { input_image: dataUri(targetBuf), swap_image: photoUri } },
     NO_FACE_RETRIES,
   );
   return fetchToBuffer(url);
+}
+
+async function swapViaFallbackVersion(targetBuf: Buffer, photoUri: string): Promise<Buffer> {
+  const url = await runReplicate(
+    "predictions",
+    { version: FACE_SWAP_FALLBACK_VERSION, input: { input_image: dataUri(targetBuf), swap_image: photoUri } },
+    NO_FACE_RETRIES,
+  );
+  return fetchToBuffer(url);
+}
+
+/**
+ * Hosted swap: tries the dedicated-GPU deployment first, falls back to the
+ * plain model-version call on ANY failure (deployment scaling issue, network
+ * error, 5xx — not just a specific one) OR if the deployment's concurrency
+ * gate is still busy past its wait budget, logged loudly either way so a
+ * degraded/contended deployment is visible rather than just looking slow.
+ * Mirrors the same unconditional-fallback philosophy as SWAP_BACKEND=auto's
+ * local→hosted fallback below.
+ */
+async function swapViaReplicate(targetBuf: Buffer, photoUri: string): Promise<Buffer> {
+  const waitStarted = Date.now();
+  const release = await acquireDeploymentSlot();
+  if (!release) {
+    console.error(
+      `[swap] deployment slot busy (max ${DEPLOYMENT_MAX_CONCURRENT} concurrent) after waiting ` +
+        `${Date.now() - waitStarted}ms — skipping the deployment for this call, using the fallback directly.`,
+    );
+    return swapViaFallbackVersion(targetBuf, photoUri);
+  }
+  const waitMs = Date.now() - waitStarted;
+  if (waitMs > 50) console.log(`[swap] acquired deployment slot after waiting ${waitMs}ms`);
+  try {
+    return await swapViaDeployment(targetBuf, photoUri);
+  } catch (err) {
+    console.error(
+      `[swap] deployment call (${FACE_SWAP_DEPLOYMENT_OWNER}/${FACE_SWAP_DEPLOYMENT_NAME}) failed — falling back ` +
+        `to the plain model version. Cause: ${(err as Error).message}`,
+    );
+    return swapViaFallbackVersion(targetBuf, photoUri);
+  } finally {
+    // Released the instant this call concludes (success or failure) — the
+    // whole point, so the next waiter starts almost immediately rather than
+    // the slot sitting held until the safety-net TTL expires.
+    await release();
+  }
 }
 
 /**

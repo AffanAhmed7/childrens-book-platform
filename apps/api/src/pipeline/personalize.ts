@@ -30,12 +30,38 @@ export class PersonalizeError extends Error {}
 
 export type Stage = "repaint" | "swap" | "restore" | "heal" | "eyes";
 
+// Indirection point for WHERE each stage actually runs. Default (below) calls
+// the stage functions directly, in-process — exactly what always happened
+// here, and what the CLI and homepage_local keep doing (they have no queue
+// infra to run against). Production (worker.ts) can instead pass
+// queueStageRunner (pipeline/queueStageRunner.ts), which runs each stage as
+// its own BullMQ job on its own queue, consumed by a dedicated stage-worker.ts
+// process per stage — see docs/INFRA_AND_PIPELINE_TRACE.md. Either way,
+// personalizeBuffer only ever sees "give me a Buffer back for this stage."
+export interface StageRunner {
+  repaint(templateBuf: Buffer, photoUri: string, model: RepaintModel): Promise<Buffer>;
+  swap(targetBuf: Buffer, photoUri: string): Promise<Buffer>;
+  restore(imageBuf: Buffer): Promise<Buffer>;
+  heal(imageBuf: Buffer): Promise<Buffer>;
+  eyes(swappedBuf: Buffer, repaintBuf: Buffer): Promise<Buffer>;
+}
+
+const directStageRunner: StageRunner = {
+  repaint: repaintScene,
+  swap: swapIdentity,
+  restore: restoreFace,
+  heal: healSwapArtifacts,
+  eyes: restoreEyeRegion,
+};
+
 export interface PersonalizeOptions {
   swap?: boolean; // default true
   restore?: boolean; // default true (only runs when swap ran)
   heal?: boolean; // default true (only runs when swap ran)
   eyeFix?: boolean; // default true (only runs when swap ran)
   repaintModel?: RepaintModel; // default "nano-banana"
+  /** default: run every stage in-process — see StageRunner above. */
+  stageRunner?: StageRunner;
   /**
    * Called after each stage with a copy of the intermediate. Lets a CLI save
    * debug frames, and the demo UI report live progress, without the engine
@@ -56,28 +82,36 @@ export async function personalizeBuffer(
   photoUri: string,
   opts: PersonalizeOptions = {},
 ): Promise<Buffer> {
-  const { swap = true, restore = true, heal = true, eyeFix = true, repaintModel = "nano-banana", onStage } = opts;
+  const {
+    swap = true,
+    restore = true,
+    heal = true,
+    eyeFix = true,
+    repaintModel = "nano-banana",
+    stageRunner = directStageRunner,
+    onStage,
+  } = opts;
 
-  let result = await repaintScene(templateBuf, photoUri, repaintModel);
+  let result = await stageRunner.repaint(templateBuf, photoUri, repaintModel);
   await onStage?.("repaint", result);
 
   if (swap) {
     // Held for the eyes stage — it needs the pre-swap eyes to paint back.
     const repainted = result;
-    result = await swapIdentity(result, photoUri);
+    result = await stageRunner.swap(result, photoUri);
     await onStage?.("swap", result);
 
     if (restore) {
-      result = await restoreFace(result);
+      result = await stageRunner.restore(result);
       await onStage?.("restore", result);
     }
     if (heal) {
-      result = await healSwapArtifacts(result);
+      result = await stageRunner.heal(result);
       await onStage?.("heal", result);
     }
     // Last, so neither restore nor heal can reintroduce the iris ring.
     if (eyeFix) {
-      result = await restoreEyeRegion(result, repainted);
+      result = await stageRunner.eyes(result, repainted);
       await onStage?.("eyes", result);
     }
   }

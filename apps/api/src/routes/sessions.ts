@@ -214,6 +214,10 @@ export async function registerSessionRoutes(app: FastifyInstance) {
             { sessionId: id, mode: mode ?? "preview" },
             { attempts: 1, removeOnComplete: true, removeOnFail: false },
           );
+          // Paired with worker.ts's "job picked up" log — the gap between these
+          // two timestamps is genuine BullMQ queue wait (job sitting unconsumed),
+          // as distinct from work that happens after pickup.
+          console.log(`[sessions] session ${id}: enqueued job ${job.id ?? "-"} (mode: ${mode ?? "preview"})`);
           await prisma.character.updateMany({ where: { sessionId: id }, data: { jobId: job.id } });
         } else {
           request.log.warn("REDIS_URL not configured — skipping pipeline enqueue.");

@@ -36,6 +36,21 @@ export const env = {
     return v === "local" || v === "auto" ? v : "replicate";
   })(),
   SWAP_LOCAL_URL: readOptional("SWAP_LOCAL_URL") ?? "http://127.0.0.1:5175",
+
+  // Which of the 5 pipeline stages (repaint/swap/restore/heal/eyes) actually
+  // run in-process vs. as their own BullMQ job on their own queue:
+  //   direct (default) — worker.ts calls each stage function itself, in-process.
+  //                       Zero extra setup; what the CLI and homepage_local always do.
+  //   queued            — each stage is enqueued to its own queue and awaited via
+  //                       BullMQ, consumed by dedicated stage-worker.ts processes
+  //                       (npm run stage:repaint / stage:swap / ...). Requires those
+  //                       processes to be running or a session's render hangs
+  //                       waiting for a stage that never gets picked up.
+  // See docs/INFRA_AND_PIPELINE_TRACE.md for why this split exists.
+  STAGE_EXECUTION: (() => {
+    const v = readOptional("STAGE_EXECUTION");
+    return v === "queued" ? "queued" : "direct";
+  })(),
 };
 
 const DAY1_REQUIRED_KEYS = [

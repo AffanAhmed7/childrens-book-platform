@@ -1,3 +1,12 @@
+// Combined dev-convenience entry point: API + worker in ONE process, for
+// low-friction local iteration. server.ts + worker-process.ts is the same
+// pair split across two processes, so the worker's CPU-bound pipeline work
+// (sharp, TF.js face detection, base64 encode/decode of image buffers)
+// can't stall this process's ability to serve HTTP/SSE — that split is what
+// `npm run server` + `npm run worker` gives you and what production should
+// run. Kept because it's what `npm run dev`/`npm start` already point to and
+// what the demo has been verified against; not being removed to avoid
+// breaking that.
 import { buildApp } from "./app";
 import { env, missingDay1Config } from "./env";
 import { startPipelineWorker } from "./worker";

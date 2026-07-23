@@ -9,6 +9,49 @@
       "port": 3001
     },
     {
+      "name": "api-server",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["run", "server"],
+      "cwd": "apps/api",
+      "port": 3001
+    },
+    {
+      "name": "api-worker",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["run", "worker"],
+      "cwd": "apps/api"
+    },
+    {
+      "name": "stage-repaint",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["run", "stage:repaint"],
+      "cwd": "apps/api"
+    },
+    {
+      "name": "stage-swap",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["run", "stage:swap"],
+      "cwd": "apps/api"
+    },
+    {
+      "name": "stage-restore",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["run", "stage:restore"],
+      "cwd": "apps/api"
+    },
+    {
+      "name": "stage-heal",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["run", "stage:heal"],
+      "cwd": "apps/api"
+    },
+    {
+      "name": "stage-eyes",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["run", "stage:eyes"],
+      "cwd": "apps/api"
+    },
+    {
       "name": "homepage",
       "runtimeExecutable": "npm",
       "runtimeArgs": ["run", "homepage"],

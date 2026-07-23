@@ -37,6 +37,12 @@ export async function fetchWithRetry(url: string, init: RequestInit, retries = 3
       : response.status === 429
         ? 10000 * (attempt + 1) + Math.random() * 2000
         : backoffMs * (attempt + 1);
+    // Otherwise a 429 backoff is completely invisible unless it exhausts and
+    // throws — exactly what made a rate-limit-inflated render look like an
+    // unexplained mystery instead of a visible, diagnosable wait.
+    if (response.status === 429) {
+      console.error(`[retry] 429 from ${url} — backing off ${Math.round(delay)}ms (attempt ${attempt + 1}/${limit + 1})`);
+    }
     await new Promise((resolve) => setTimeout(resolve, delay));
   }
 }

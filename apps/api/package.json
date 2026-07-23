@@ -9,6 +9,14 @@
   "scripts": {
     "dev": "tsx watch src/index.ts",
     "start": "tsx src/index.ts",
+    "server": "tsx watch src/server.ts",
+    "worker": "tsx watch src/worker-process.ts",
+    "stage-worker": "tsx watch src/stage-worker.ts",
+    "stage:repaint": "cross-env STAGE=repaint tsx watch src/stage-worker.ts",
+    "stage:swap": "cross-env STAGE=swap tsx watch src/stage-worker.ts",
+    "stage:restore": "cross-env STAGE=restore tsx watch src/stage-worker.ts",
+    "stage:heal": "cross-env STAGE=heal tsx watch src/stage-worker.ts",
+    "stage:eyes": "cross-env STAGE=eyes tsx watch src/stage-worker.ts",
     "personalize": "tsx demo/personalize.mts",
     "homepage": "tsx homepage/server.mts",
     "homepage:local": "tsx homepage_local/server.mts",
@@ -37,6 +45,7 @@
   },
   "devDependencies": {
     "@types/node": "^22.10.1",
+    "cross-env": "^7.0.3",
     "pino-pretty": "^13.0.0",
     "prisma": "^6.1.0",
     "tsx": "^4.19.2",

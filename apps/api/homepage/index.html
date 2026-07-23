@@ -292,6 +292,12 @@ async function run() {
   for (const k of keys) grid.appendChild(card(k, runMode));
 
   const started = Date.now();
+  // Full detail to the browser console for every step, not just the short
+  // label shown in the UI — the UI is deliberately terse (one line per
+  // card), so anyone diagnosing a slow or stuck render needs this instead of
+  // guessing from what's on screen.
+  const log = (...args) => console.log("[render +" + ((Date.now() - started) / 1000).toFixed(1) + "s]", ...args);
+  log("run started", { mode: runMode, pages: keys, apiBase: sc.apiBase });
   const est = estimateFor(modeInfo.pages);
   const setEta = (html) => {
     st.eta = html;
@@ -319,6 +325,7 @@ async function run() {
     st.poll = null;
   };
   const finish = (html) => {
+    log("run finished", html.replace(/<[^>]+>/g, ""));
     stop();
     st.live = false;
     setEta(html);
@@ -360,13 +367,19 @@ async function run() {
     let res;
     try {
       res = await fetch(apiBase + "/api/sessions/" + sessionId + "/pages").then((r) => r.json());
-    } catch {
+    } catch (e) {
+      log("poll /pages FAILED", e.message || e);
       return;
     }
+    log(
+      "poll /pages",
+      (res.pages || []).map((p) => p.id + ":" + (p.ready ? "ready" : "not-ready")).join(", "),
+    );
     for (const p of res.pages || []) {
       if (!p.ready || st.rendered.has(p.id)) continue;
       const el = document.getElementById("res-" + runMode + "-" + p.id);
       if (!el) continue;
+      log("page marked done (via /pages poll)", p.id);
       st.rendered.add(p.id);
       el.querySelector(".bar").classList.add("hidden");
       const badge = el.querySelector(".state");
@@ -393,18 +406,24 @@ async function run() {
   const giveUpAt = started + Math.max(est * 3, 300) * 1000;
 
   try {
+    log("validating photo(s) locally");
     await validateAll(need);
+    log("validated ok");
 
     const session = await createSession(apiBase, modeInfo.storyId, need);
+    log("session created", session.sessionId);
     for (const c of session.characters) {
       const slotId = c.slot === "child_1" ? "a" : "b";
       await uploadCharacter(apiBase, session.sessionId, c.characterId, slotId);
+      log("uploaded + confirmed character", c.characterId, "slot", c.slot);
     }
     // uploadCharacter already requested mode:"full" on upload-confirm, so the
     // one auto-enqueued job renders every page — no separate render-full call.
+    log("all characters uploaded — render job should now be enqueued server-side");
 
     st.poll = setInterval(() => {
       if (Date.now() > giveUpAt) {
+        log("GIVE-UP timeout reached (" + Math.round((giveUpAt - started) / 1000) + "s budget) — marking remaining pages failed");
         markRemainingFailed("Timed out waiting for this page.");
         finish("Stopped after <b>" + fmt(Math.round((Date.now() - started) / 1000)) + "</b>");
         return;
@@ -414,8 +433,10 @@ async function run() {
     pollPages(session.sessionId);
 
     st.es = new EventSource(apiBase + "/api/sessions/" + session.sessionId + "/status");
+    st.es.addEventListener("open", () => log("SSE connection opened"));
     st.es.addEventListener("status", (m) => {
       const e = JSON.parse(m.data);
+      log("SSE status", e);
       if (e.page) {
         // Page-specific progress (which page started, which pipeline stage
         // it's on) — route it onto that page's own card instead of the
@@ -433,9 +454,13 @@ async function run() {
     // Deliberately NOT finishing the run here — see the pollPages comment
     // above. This event just means SOME job for this session finished; an
     // extra immediate poll makes that page's result appear a little sooner.
-    st.es.addEventListener("done", () => { pollPages(session.sessionId); });
+    st.es.addEventListener("done", (m) => {
+      log("SSE done", JSON.parse(m.data));
+      pollPages(session.sessionId);
+    });
     st.es.addEventListener("error", (m) => {
       const e = JSON.parse(m.data);
+      log("SSE error event", e);
       showError(e.message || "The render failed.");
       // A job-level error doesn't necessarily doom every page (the other
       // enqueued job may still be working), so keep polling rather than
@@ -444,8 +469,10 @@ async function run() {
     st.es.onerror = () => {
       // EventSource auto-retries on a network blip by itself; polling
       // independently already covers completion, so nothing to do here.
+      log("SSE connection error/closed (EventSource will auto-retry)", { readyState: st.es && st.es.readyState });
     };
   } catch (e) {
+    log("run FAILED", e.message || e);
     stop();
     st.live = false;
     // A thrown error here (session creation, upload, or the direct R2 PUT —

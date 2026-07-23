@@ -54,8 +54,9 @@ or do:
 
 | Surface | Command | Port | Needs | Use it for |
 |---|---|---|---|---|
-| **Production API + worker** | `npm run dev` | :3001 | Full `.env` | The real backend — sessions, R2, BullMQ, the actual product |
-| **`homepage`** | `npm run homepage` | :5174 | Full `.env` + `npm run dev` running | Proving the real end-to-end product works, through a browser |
+| **Production API + worker (combined)** | `npm run dev` | :3001 | Full `.env` | Low-friction local dev — both in one process |
+| **Production API + worker (split)** | `npm run server` + `npm run worker` (2 processes) | :3001 | Full `.env` | **Recommended for anything real** — see §4a |
+| **`homepage`** | `npm run homepage` | :5174 | Full `.env` + the API running (`dev`, or `server`+`worker`) | Proving the real end-to-end product works, through a browser |
 | **`homepage_local`** | `npm run homepage:local` | :5179 | Just `REPLICATE_API_TOKEN` | Fast pipeline iteration, or a demo immune to infra problems |
 | **CLI** | `npm run personalize -- photo.jpg` | — | Just `REPLICATE_API_TOKEN` | Scripted/batch runs, `--detect-only` free preflight, `--debug` intermediate frames |
 
@@ -69,13 +70,36 @@ running" are different jobs.
 All four call the identical `personalizePage()` — what you see from any of them is real
 model output, not a mock.
 
-## 4. How the real flow actually works (`homepage` → production API → R2/Postgres/Redis)
+## 4a. API and worker are now two separate processes
+
+`src/index.ts` (what `npm run dev`/`npm start` run) still boots the Fastify API and the
+BullMQ worker in one Node process — kept as-is for low-friction local dev, since it's
+what's been verified against so far. But that combined mode has a real cost: the
+worker's per-job work — `sharp` image ops, TF.js face detection (`faceDetect.ts`), and
+base64 encode/decode of multi-MB page buffers (`dataUri.ts`, the local swap path) — is
+synchronous, CPU-bound JS. Sharing an event loop with the HTTP server means a page
+mid-render can stall this process's ability to accept new connections, answer
+`/health`, or flush an SSE event on time. The two are logically independent already
+(they only ever talk through Postgres/R2/the BullMQ queue, never shared memory), so the
+fix is running them as two OS processes instead of splitting the code:
+
+- `src/server.ts` (`npm run server`) — Fastify API only. No BullMQ worker attached.
+- `src/worker-process.ts` (`npm run worker`) — BullMQ worker only. No HTTP server.
+
+Both read the same `.env`. Run them in two terminals (or two `.claude/launch.json`
+entries: `api-server` + `api-worker`) instead of `npm run dev` for anything where the
+API's responsiveness matters — which is the recommended way to run this for a real
+demo or in production. Verified 2026-07-23: booted each independently — `server.ts`
+served `/health` with no worker in the process at all; `worker-process.ts` picked up
+the BullMQ connection and warmed the face detector with zero Fastify/HTTP code loaded.
+
+## 4b. How the real flow actually works (`homepage` → production API → R2/Postgres/Redis)
 
 This is the part worth understanding in detail, since it's new this session and has
 more moving parts than the other three surfaces.
 
 ```
-Browser (:5174)                 Production API (:3001)              Worker (same process as API)
+Browser (:5174)                 Production API (:3001)              Worker (separate process — §4a)
      |                                  |                                      |
      |-- POST /api/sessions ----------->|  creates Session + Character rows    |
      |<-- sessionId, characterIds ------|  in Postgres                         |
@@ -216,8 +240,11 @@ In priority order — see `apps/api/README.md` for the full detail on each:
 ```
 apps/api/
   src/
-    app.ts, index.ts        production Fastify app + boot
-    worker.ts                BullMQ consumer — the thing that actually renders pages
+    app.ts                    Fastify app definition (routes, cors, swagger)
+    index.ts                  combined dev boot: API + worker, one process
+    server.ts                 API-ONLY boot — pairs with worker-process.ts, see §4a
+    worker-process.ts         WORKER-ONLY boot — pairs with server.ts, see §4a
+    worker.ts                 BullMQ consumer — the thing that actually renders pages
     routes/sessions.ts       session/upload/render/status/pages endpoints
     storage.ts                R2 client (presigned PUT/GET, put/get/exists)
     status-events.ts          Redis pub/sub for live SSE progress
