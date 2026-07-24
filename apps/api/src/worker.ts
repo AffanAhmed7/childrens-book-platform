@@ -214,6 +214,17 @@ export function startPipelineWorker(): Worker<PipelineJobData> {
   worker.on("failed", (job, error) => {
     console.error(`[worker] job ${job?.id ?? "-"} (session ${job?.data.sessionId ?? "-"}) FAILED:`, error.message);
   });
+  // Previously unmonitored: BullMQ decides a job "stalled" (its lock wasn't
+  // renewed in time) and silently reprocesses it from scratch — indistinguishable
+  // from the outside from ordinary slowness, but it means real work is being
+  // repeated and paid for twice. Two plausible causes here specifically: a
+  // genuine Redis connectivity gap, or this process's event loop being blocked
+  // long enough to miss a lock renewal — heal.ts/eyes.ts both run synchronous,
+  // CPU-bound pixel loops directly on the event loop, which is exactly the kind
+  // of thing that can do that on a large image.
+  worker.on("stalled", (jobId) => {
+    console.error(`[worker] job ${jobId} STALLED — BullMQ is reprocessing it. Check for a blocked event loop or a Redis blip.`);
+  });
   worker.on("error", (error) => {
     console.error("[worker] worker-level error:", error.message);
   });

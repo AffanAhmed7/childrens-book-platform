@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { Queue, QueueEvents } from "bullmq";
-import { createRedisConnection } from "../redis";
+import { createRedisConnection, createQueueRedisConnection } from "../redis";
 import { getObjectBuffer, putObject } from "../storage";
 import { STAGE_NAMES, stageQueueName, type StageJobData, type StageJobResult, type StageName } from "./stageQueue";
 import type { StageRunner } from "./personalize";
@@ -42,7 +42,7 @@ const queues = new Map<StageName, Queue<StageJobData, StageJobResult>>();
 function getQueue(stage: StageName): Queue<StageJobData, StageJobResult> {
   let q = queues.get(stage);
   if (!q) {
-    q = new Queue(stageQueueName(stage), { connection: createRedisConnection() });
+    q = new Queue(stageQueueName(stage), { connection: createQueueRedisConnection() });
     queues.set(stage, q);
   }
   return q;
@@ -66,10 +66,31 @@ function scratchKey(label: string): string {
   return `scratch/${label}/${randomUUID()}.png`;
 }
 
+// A buffer returned by one runStage call is already sitting in R2 under a
+// known key (we just downloaded it from there to hand back). personalizeBuffer's
+// stage chain always passes that exact object straight into the next stage
+// call (`result = await stageRunner.swap(result, ...)`), so re-uploading it
+// under a fresh scratch key is wasted round-trip work: same bytes, new key,
+// immediately re-downloaded by the next stage-worker. Keyed on object
+// identity (WeakMap), not content — safe across concurrent renders since
+// every Buffer instance is distinct regardless of what's in it, and entries
+// fall out once a buffer is garbage collected. Cuts what was 4 R2 ops per
+// stage boundary (orchestrator upload, stage-worker download, stage-worker
+// upload, orchestrator download) down to 3 for every stage after the first.
+const knownR2Keys = new WeakMap<Buffer, string>();
+
+async function ensureUploaded(buf: Buffer, label: string): Promise<{ key: string; uploadMs: number }> {
+  const known = knownR2Keys.get(buf);
+  if (known) return { key: known, uploadMs: 0 };
+  const started = Date.now();
+  const key = scratchKey(label);
+  await putObject(key, buf, "image/png");
+  return { key, uploadMs: Date.now() - started };
+}
+
 async function runStage(stage: StageName, inputBuf: Buffer, extra: Omit<StageJobData, "inputKey"> = {}): Promise<Buffer> {
   const started = Date.now();
-  const inputKey = scratchKey(stage);
-  await putObject(inputKey, inputBuf, "image/png");
+  const { key: inputKey, uploadMs } = await ensureUploaded(inputBuf, stage);
 
   const job = await getQueue(stage).add(
     stage,
@@ -89,7 +110,10 @@ async function runStage(stage: StageName, inputBuf: Buffer, extra: Omit<StageJob
     { attempts: 1, removeOnComplete: { count: 1000, age: 3600 }, removeOnFail: 100 },
   );
   const enqueuedAt = Date.now();
-  console.log(`[queueStageRunner] stage "${stage}" job ${job.id ?? "-"} enqueued (input upload took ${enqueuedAt - started}ms)`);
+  console.log(
+    `[queueStageRunner] stage "${stage}" job ${job.id ?? "-"} enqueued (input upload took ` +
+      `${uploadMs === 0 ? "0ms — reused prior stage's R2 key" : `${uploadMs}ms`})`,
+  );
   try {
     const result = await job.waitUntilFinished(getQueueEvents(stage), STAGE_JOB_TIMEOUT_MS);
     const finishedAt = Date.now();
@@ -97,7 +121,9 @@ async function runStage(stage: StageName, inputBuf: Buffer, extra: Omit<StageJob
       `[queueStageRunner] stage "${stage}" job ${job.id ?? "-"} completed — queue+execute took ${finishedAt - enqueuedAt}ms ` +
         `(total incl. upload: ${finishedAt - started}ms)`,
     );
-    return await getObjectBuffer(result.outputKey);
+    const output = await getObjectBuffer(result.outputKey);
+    knownR2Keys.set(output, result.outputKey);
+    return output;
   } catch (error) {
     console.error(
       `[queueStageRunner] stage "${stage}" job ${job.id ?? "-"} FAILED after ${Date.now() - enqueuedAt}ms:`,
@@ -113,10 +139,11 @@ export const queueStageRunner: StageRunner = {
   restore: (imageBuf) => runStage("restore", imageBuf),
   heal: (imageBuf) => runStage("heal", imageBuf),
   eyes: async (swappedBuf, repaintBuf) => {
-    // The eyes stage needs a SECOND image (the pre-swap repaint) — upload it
-    // too and pass its key alongside the primary input.
-    const repaintedKey = scratchKey("eyes-repainted");
-    await putObject(repaintedKey, repaintBuf, "image/png");
+    // The eyes stage needs a SECOND image (the pre-swap repaint). repaintBuf is
+    // the exact object the repaint stage returned earlier, so it's almost
+    // always already sitting in R2 under repaint's own output key —
+    // ensureUploaded reuses that key instead of uploading a duplicate copy.
+    const { key: repaintedKey } = await ensureUploaded(repaintBuf, "eyes-repainted");
     return runStage("eyes", swappedBuf, { repaintedKey });
   },
 };

@@ -114,6 +114,13 @@ console.log(`[stage-worker:${STAGE}] listening on "${stageQueueName(STAGE)}", co
 worker.on("failed", (job, error) => {
   console.error(`[stage-worker:${STAGE}] job ${job?.id ?? "-"} FAILED:`, error.message);
 });
+// See worker.ts's identical listener for why this matters: an unmonitored
+// stall means BullMQ silently reprocessed a job from scratch, invisible from
+// outside except as unexplained extra latency and (for a hosted stage) a
+// second paid API call.
+worker.on("stalled", (jobId) => {
+  console.error(`[stage-worker:${STAGE}] job ${jobId} STALLED — BullMQ is reprocessing it. Check for a blocked event loop or a Redis blip.`);
+});
 worker.on("error", (error) => {
   console.error(`[stage-worker:${STAGE}] worker-level error:`, error.message);
 });

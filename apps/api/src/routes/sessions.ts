@@ -209,10 +209,24 @@ export async function registerSessionRoutes(app: FastifyInstance) {
           // the rest of the book is rendered by POST /render-full once it's
           // bought. A caller can pass mode:"full" to skip straight to
           // rendering everything in this one job instead.
+          //
+          // jobId IS the race fix: two characters' upload-confirm requests
+          // landing close together can both observe "0 characters remaining"
+          // after both DB updates commit (check-then-act, no transaction) and
+          // both reach this line. A plain queue.add() would enqueue two jobs
+          // for the same session — harmless today only because
+          // WORKER_CONCURRENCY=1 forces them to run one after another (the
+          // second finds every page already rendered and no-ops), but a real
+          // double-render the moment that concurrency is raised. Giving both
+          // calls the SAME deterministic jobId makes BullMQ itself the dedup:
+          // the second add() for an id that's already waiting/active is a
+          // no-op. Scoped to `${id}__${mode}`, not just `id`, so a genuine
+          // preview-then-full sequence isn't accidentally deduped against
+          // itself.
           const job = await getPipelineQueue().add(
             "process",
             { sessionId: id, mode: mode ?? "preview" },
-            { attempts: 1, removeOnComplete: true, removeOnFail: false },
+            { attempts: 1, removeOnComplete: true, removeOnFail: false, jobId: `${id}__${mode ?? "preview"}` },
           );
           // Paired with worker.ts's "job picked up" log — the gap between these
           // two timestamps is genuine BullMQ queue wait (job sitting unconsumed),
@@ -251,11 +265,14 @@ export async function registerSessionRoutes(app: FastifyInstance) {
       }
 
       // Pages already rendered for the preview are reused, not re-paid for —
-      // the worker skips any page that already exists in storage.
+      // the worker skips any page that already exists in storage. Same jobId
+      // dedup as upload-confirm above: a double-click or client retry on this
+      // endpoint gets deduped by BullMQ instead of enqueueing a second "full"
+      // job for the same session.
       const job = await getPipelineQueue().add(
         "process",
         { sessionId: id, mode: "full" },
-        { attempts: 1, removeOnComplete: true, removeOnFail: false },
+        { attempts: 1, removeOnComplete: true, removeOnFail: false, jobId: `${id}__full` },
       );
       reply.code(202);
       return { ok: true as const, jobId: job.id ?? null };
