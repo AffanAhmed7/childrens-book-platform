@@ -231,40 +231,20 @@ async function swapViaFallbackVersion(targetBuf: Buffer, photoUri: string): Prom
 }
 
 /**
- * Hosted swap: tries the dedicated-GPU deployment first, falls back to the
- * plain model-version call on ANY failure (deployment scaling issue, network
- * error, 5xx — not just a specific one) OR if the deployment's concurrency
- * gate is still busy past its wait budget, logged loudly either way so a
- * degraded/contended deployment is visible rather than just looking slow.
- * Mirrors the same unconditional-fallback philosophy as SWAP_BACKEND=auto's
- * local→hosted fallback below.
+ * Hosted swap: defaults straight to the plain fallback model version, NOT the
+ * dedicated-GPU deployment. The deployment is owned by a specific Replicate
+ * account (FACE_SWAP_DEPLOYMENT_OWNER); now that runReplicate can transparently
+ * switch between two different accounts on a rate limit (see replicate.ts),
+ * a deployment tied to one specific account is no longer a safe default — the
+ * fallback-triggered account might not have access to it. The plain model
+ * version is a public model callable from either account, so it's the correct
+ * default now. `swapViaDeployment`/`acquireDeploymentSlot` are kept intact
+ * below, dormant, in case the deployment is revisited later (e.g. pinned to
+ * whichever account actually owns it, called only when that specific account
+ * is in use).
  */
 async function swapViaReplicate(targetBuf: Buffer, photoUri: string): Promise<Buffer> {
-  const waitStarted = Date.now();
-  const release = await acquireDeploymentSlot();
-  if (!release) {
-    console.error(
-      `[swap] deployment slot busy (max ${DEPLOYMENT_MAX_CONCURRENT} concurrent) after waiting ` +
-        `${Date.now() - waitStarted}ms — skipping the deployment for this call, using the fallback directly.`,
-    );
-    return swapViaFallbackVersion(targetBuf, photoUri);
-  }
-  const waitMs = Date.now() - waitStarted;
-  if (waitMs > 50) console.log(`[swap] acquired deployment slot after waiting ${waitMs}ms`);
-  try {
-    return await swapViaDeployment(targetBuf, photoUri);
-  } catch (err) {
-    console.error(
-      `[swap] deployment call (${FACE_SWAP_DEPLOYMENT_OWNER}/${FACE_SWAP_DEPLOYMENT_NAME}) failed — falling back ` +
-        `to the plain model version. Cause: ${(err as Error).message}`,
-    );
-    return swapViaFallbackVersion(targetBuf, photoUri);
-  } finally {
-    // Released the instant this call concludes (success or failure) — the
-    // whole point, so the next waiter starts almost immediately rather than
-    // the slot sitting held until the safety-net TTL expires.
-    await release();
-  }
+  return swapViaFallbackVersion(targetBuf, photoUri);
 }
 
 /**

@@ -15,6 +15,12 @@ export const env = {
   R2_BUCKET_NAME: readOptional("R2_BUCKET_NAME"),
   REDIS_URL: readOptional("REDIS_URL"),
   REPLICATE_API_TOKEN: readOptional("REPLICATE_API_TOKEN"),
+  // Second Replicate account, used as an immediate-switch fallback (not a
+  // patient retry) the moment the primary account gets rate-limited — see
+  // replicate.ts's acquireAccount/fetchReplicateWithAccountFallback. Optional:
+  // with this unset, behavior is identical to before (one account, waits out
+  // its own rate limit as it always did).
+  REPLICATE_API_TOKEN_FALLBACK: readOptional("REPLICATE_API_TOKEN_FALLBACK"),
   // Comma-separated so the homepage (its own origin, :5174) and any future
   // deployed frontend can both be allowed without editing code per-origin.
   CORS_ORIGIN: (readOptional("CORS_ORIGIN") ?? "http://localhost:3000")

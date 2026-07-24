@@ -12,7 +12,18 @@
 // the next attempt instead of spreading out enough for the bucket to refill.
 const RATE_LIMIT_RETRIES = 6;
 
-export async function fetchWithRetry(url: string, init: RequestInit, retries = 3, backoffMs = 1500): Promise<Response> {
+export async function fetchWithRetry(
+  url: string,
+  init: RequestInit,
+  retries = 3,
+  backoffMs = 1500,
+  options: { retryOn429?: boolean } = {},
+): Promise<Response> {
+  // Default true — every existing caller keeps its current behavior
+  // unchanged. replicate.ts's multi-account fallback passes false: it wants
+  // to switch to a different API key immediately on a 429, not have this
+  // function silently sleep through it first.
+  const retryOn429 = options.retryOn429 ?? true;
   let lastError: unknown;
   for (let attempt = 0; ; attempt += 1) {
     let response: Response;
@@ -23,6 +34,9 @@ export async function fetchWithRetry(url: string, init: RequestInit, retries = 3
       if (attempt >= retries) throw lastError instanceof Error ? lastError : new Error(String(lastError));
       await new Promise((resolve) => setTimeout(resolve, backoffMs * (attempt + 1)));
       continue;
+    }
+    if (response.status === 429 && !retryOn429) {
+      return response;
     }
     if (response.ok || (response.status >= 400 && response.status < 500 && response.status !== 429)) {
       return response;
