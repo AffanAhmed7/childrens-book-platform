@@ -3,6 +3,11 @@
 TypeScript service that owns multi-character sessions, presigned R2 uploads, the BullMQ
 pipeline worker, the SSE status stream, the OpenAPI docs — and the image engine itself.
 
+> This file covers the personalization engine specifically. The same service also has a
+> cart/checkout/print-dispatch layer (`src/routes/checkout.ts`, `src/fulfillment.ts`,
+> `src/print/`, `src/email/`) — see
+> **[../../docs/CART_CHECKOUT_SETUP.md](../../docs/CART_CHECKOUT_SETUP.md)** for that.
+
 ## Setup
 
 ```bash

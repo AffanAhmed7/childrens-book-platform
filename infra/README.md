@@ -7,9 +7,12 @@ Lightweight deployment reference (no heavy IaC for a 3-day prototype).
 > `/docs` URL. It is the one outstanding deliverable in
 > [PROJECT_PLAN.md §14](../PROJECT_PLAN.md).
 >
-> The Web/Vercel row is for the **deferred** `apps/web` UI, which is unbuilt. The homepage
-> that exists today (`npm run homepage`) runs locally and needs none of the components
-> in this table except a Replicate token.
+> **Update (2026-08-30):** the Web/Vercel row is no longer "deferred, unbuilt" — `apps/web`
+> now exists (cart/checkout/confirmation/track, see
+> [docs/CART_CHECKOUT_SETUP.md](../docs/CART_CHECKOUT_SETUP.md)) and is exactly what would
+> deploy to Vercel. Still not deployed anywhere, same as the API. The homepage
+> (`npm run homepage`) still runs locally and needs only a Replicate token, unrelated to
+> this table.
 
 | Component | Host | Notes |
 |-----------|------|-------|

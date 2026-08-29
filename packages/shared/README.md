@@ -1,23 +1,29 @@
-# packages/shared — placeholder, EMPTY
+# packages/shared — placeholder, still EMPTY
 
 > **Nothing was ever built here.** This directory contains only this README. It is kept
 > as a slot for the future, not as a dependency — nothing imports it, and the workspace
 > builds fine without it.
 
-The original plan was to share framework-agnostic TypeScript between `api` and `web`:
-status unions, pipeline step names, SSE copy strings, API DTOs. That never happened,
-because `apps/web` was deferred on 2026-07-15 and an API-only build has nothing to share
-*with*. Putting the types here anyway would have added a build step and an indirection
-for a single consumer.
+**Update (2026-08-30):** the original justification for deferring this — "an API-only
+build has nothing to share *with*" — is no longer true. `apps/web` was built on this date
+(cart/checkout/confirmation/track pages), so a second consumer now exists. It's still
+*not* populated, deliberately: `apps/api` and `apps/web` are two independent npm projects
+with no root workspace linking them, so a real shared package would need actual workspace
+plumbing (npm/pnpm workspaces, a build step for the shared package) — a bigger structural
+change than the handful of DTOs currently justify. `apps/web`'s `lib/pricing.ts` instead
+hand-duplicates the couple of fields it needs from `apps/api`'s `catalog.ts`, explicitly
+marked "display only, not the source of truth" in a comment there.
 
 **Where those things actually live today, all in `apps/api`:**
 
 | Planned to live here | Actually lives in |
 |---|---|
 | Session/Character status unions, pipeline step names | `src/pipeline/types.ts` |
+| Order status vocabulary | `src/orderStatus.ts` |
 | User-facing SSE copy strings | `src/messages.ts` |
-| API request/response DTOs | `src/routes/sessions.ts` (TypeBox schemas, which also generate the OpenAPI docs) |
+| API request/response DTOs | `src/routes/*.ts` (TypeBox schemas, which also generate the OpenAPI docs) |
 
-**If the browser UI is ever built**, that is the point at which extracting the status
-vocabulary and the copy strings into this package earns its keep — a second consumer is
-exactly the condition that is missing today.
+**Revisit this if type drift between `apps/api` and `apps/web` becomes a real, recurring
+bug** (a response shape changes in one place and silently breaks the other) — that's the
+actual condition that justifies the workspace-plumbing cost, not just "two consumers now
+exist."
