@@ -5,6 +5,7 @@ import swaggerUI from "@fastify/swagger-ui";
 import type { TypeBoxTypeProvider } from "@fastify/type-provider-typebox";
 import { env } from "./env";
 import { registerSessionRoutes } from "./routes/sessions";
+import { registerCheckoutRoutes } from "./routes/checkout";
 
 export async function buildApp() {
   const app = Fastify({ logger: true }).withTypeProvider<TypeBoxTypeProvider>();
@@ -27,6 +28,7 @@ export async function buildApp() {
   app.get("/health", async () => ({ ok: true }));
 
   await registerSessionRoutes(app);
+  await registerCheckoutRoutes(app);
 
   return app;
 }
