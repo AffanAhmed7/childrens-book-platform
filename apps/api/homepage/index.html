@@ -396,7 +396,16 @@ async function run() {
       el.appendChild(a);
     }
     if (keys.every((k) => st.rendered.has(k))) {
-      finish("Finished in <b>" + fmt(Math.round((Date.now() - started) / 1000)) + "</b>");
+      // Bridge into the standalone cart/checkout app (apps/web). Hardcoded
+      // localhost default matches how this file already hardcodes its own
+      // local-dev assumptions elsewhere — point this at the real deployed
+      // web app's origin once one exists.
+      const webAppUrl = window.WEB_APP_URL || "http://localhost:3000";
+      const cartUrl = webAppUrl + "/cart?add=" + encodeURIComponent(sessionId);
+      finish(
+        "Finished in <b>" + fmt(Math.round((Date.now() - started) / 1000)) + "</b> · " +
+          '<a class="dl" href="' + cartUrl + '">Add this book to cart →</a>',
+      );
     }
   };
 
