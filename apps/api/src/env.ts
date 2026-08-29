@@ -57,6 +57,22 @@ export const env = {
     const v = readOptional("STAGE_EXECUTION");
     return v === "queued" ? "queued" : "direct";
   })(),
+
+  STRIPE_SECRET_KEY: readOptional("STRIPE_SECRET_KEY"),
+  STRIPE_WEBHOOK_SECRET: readOptional("STRIPE_WEBHOOK_SECRET"),
+  GELATO_API_KEY: readOptional("GELATO_API_KEY"),
+  GELATO_PRODUCT_UID: readOptional("GELATO_PRODUCT_UID"),
+  // Optional: only set if Gelato's dashboard offers a webhook signing secret
+  // for your account. If unset, the Gelato webhook route accepts unsigned
+  // requests — acceptable for now since GELATO_API_KEY-gated status is a low-
+  // value target, but tighten this before relying on it for anything financial.
+  GELATO_WEBHOOK_SECRET: readOptional("GELATO_WEBHOOK_SECRET"),
+  RESEND_API_KEY: readOptional("RESEND_API_KEY"),
+  RESEND_FROM_ADDRESS: readOptional("RESEND_FROM_ADDRESS") ?? "orders@example.com",
+  // Print trim size in inches. 8.5x8.5 is a common square kids-book size;
+  // override once you've picked a real Gelato product.
+  PRINT_TRIM_WIDTH_IN: Number(readOptional("PRINT_TRIM_WIDTH_IN") ?? "8.5"),
+  PRINT_TRIM_HEIGHT_IN: Number(readOptional("PRINT_TRIM_HEIGHT_IN") ?? "8.5"),
 };
 
 const DAY1_REQUIRED_KEYS = [
