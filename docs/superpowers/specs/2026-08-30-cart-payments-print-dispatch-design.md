@@ -93,7 +93,6 @@ model Order {
   totalCents            Int
   currency              String   @default("eur")
   gdprConsentAt         DateTime
-  printPdfKey           String?
   gelatoOrderId         String?
   createdAt             DateTime @default(now())
   updatedAt             DateTime @updatedAt
@@ -111,6 +110,11 @@ model OrderItem {
   priceCents       Int
   configSnapshot   Json    // [{slot, childName, rawKey}]
   printPageKeys    Json    // R2 keys of the rendered pages used, in order
+  printPdfKey      String? // this item's own assembled print PDF — one per
+                           // book, not one per order, since Gelato's order-
+                           // create API takes multiple line items each with
+                           // their own file (a 2-book cart ships as one
+                           // Gelato order with 2 items, 2 files)
 }
 
 model OrderStatusEvent {
@@ -145,13 +149,14 @@ model OrderStatusEvent {
 3. **PDF assembly (`src/print/assemble.ts`)** — per `OrderItem`, pulls each
    rendered page PNG from R2 (`pageObjectKey`), converts to a CMYK JPEG via
    `sharp().toColourspace("cmyk")` sized for the book's configured trim size,
-   assembles into one PDFKit document, uploads to R2, sets `printPdfKey`, status
-   → `pdf_ready`.
-4. **Gelato dispatch (`src/print/gelato.ts`)** — POSTs the presigned PDF URL +
-   shipping address to Gelato's order-create endpoint using the configured
-   product UID, stores `gelatoOrderId`, status → `submitted_to_print`. Sends the
-   Resend confirmation email at this point (order ID, book summary, estimated
-   delivery, GDPR deletion timeline copy).
+   assembles into one PDFKit document per item, uploads to R2, sets that item's
+   `printPdfKey`. Once every item has one, order status → `pdf_ready`.
+4. **Gelato dispatch (`src/print/gelato.ts`)** — one Gelato order carrying one
+   line item per `OrderItem` (its own `printPdfKey` as the file, its own
+   product UID), shipping address from the `Order`. Stores `gelatoOrderId`,
+   status → `submitted_to_print`. Sends the Resend confirmation email at this
+   point (order ID, book summary, estimated delivery, GDPR deletion timeline
+   copy).
 5. **`POST /api/webhooks/gelato`** — receives Gelato status callbacks, appends an
    `OrderStatusEvent` with the raw payload, maps Gelato's vocabulary onto
    `processing`/`dispatched`/`delivered`.
