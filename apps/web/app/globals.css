@@ -1,0 +1,17 @@
+@import "tailwindcss";
+
+/*
+ * Tailwind v4 config lives in CSS, not tailwind.config.ts — @theme registers
+ * these as real utility classes (bg-cream, text-ink, font-serif, etc.).
+ */
+@theme {
+  --color-cream: #faf7f2;
+  --color-ink: #3d2b1f;
+  --color-accent: #e8c5a0;
+  --font-serif: "Playfair Display", Georgia, serif;
+}
+
+body {
+  background-color: var(--color-cream);
+  color: var(--color-ink);
+}
