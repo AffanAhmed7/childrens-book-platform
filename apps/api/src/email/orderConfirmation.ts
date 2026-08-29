@@ -1,7 +1,10 @@
 import { Resend } from "resend";
 import { env } from "../env";
 
-const resend = new Resend(env.RESEND_API_KEY ?? "");
+// Same construction-time-throw issue as stripeClient.ts: Resend's constructor
+// throws on an empty/missing key rather than deferring to call time, so an
+// empty-string fallback would crash the whole server at boot.
+const resend = new Resend(env.RESEND_API_KEY ?? "re_unconfigured");
 
 // Matches the promise made in the /confirmation page and the reference site's
 // own trust-section wording. Keep these two copies in sync if either changes —
