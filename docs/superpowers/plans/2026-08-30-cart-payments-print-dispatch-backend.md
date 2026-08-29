@@ -597,10 +597,14 @@ git commit -m "feat: add Stripe/Gelato/Resend/print-size environment variables"
 import Stripe from "stripe";
 import { env } from "./env";
 
-// Empty-string fallback matches this codebase's existing pattern (db.ts,
-// storage.ts) of letting the process boot without credentials — real calls
-// fail clearly at call time instead of crashing at import time.
-export const stripe = new Stripe(env.STRIPE_SECRET_KEY ?? "");
+// Unlike this codebase's other credential fallbacks (db.ts's placeholder URL,
+// storage.ts's empty-string R2 keys), the Stripe SDK THROWS at construction
+// time if given an empty string — an empty-string fallback here would crash
+// the entire server at boot, not just Stripe calls, whenever
+// STRIPE_SECRET_KEY is unset. A placeholder string satisfies the
+// constructor's "something was provided" check without making any network
+// call — real calls still fail clearly, just at call time instead of import time.
+export const stripe = new Stripe(env.STRIPE_SECRET_KEY ?? "sk_test_unconfigured");
 ```
 
 - [ ] **Step 2: Typecheck**
@@ -854,7 +858,10 @@ git commit -m "feat: add Gelato order dispatch"
 import { Resend } from "resend";
 import { env } from "../env";
 
-const resend = new Resend(env.RESEND_API_KEY ?? "");
+// Same construction-time-throw issue as stripeClient.ts: Resend's constructor
+// throws on an empty/missing key rather than deferring to call time, so an
+// empty-string fallback would crash the whole server at boot.
+const resend = new Resend(env.RESEND_API_KEY ?? "re_unconfigured");
 
 // Matches the promise made in the /confirmation page and the reference site's
 // own trust-section wording. Keep these two copies in sync if either changes —
