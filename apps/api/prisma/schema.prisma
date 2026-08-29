@@ -28,3 +28,47 @@ model Character {
 
   @@unique([sessionId, slot])
 }
+
+model Order {
+  id                    String   @id @default(uuid())
+  email                 String
+  shippingName          String
+  shippingLine1         String
+  shippingLine2         String?
+  shippingCity          String
+  shippingPostalCode    String
+  shippingCountry       String
+  status                String   @default("awaiting_payment")
+  stripePaymentIntentId String?  @unique
+  totalCents            Int
+  currency              String   @default("eur")
+  gdprConsentAt         DateTime
+  gelatoOrderId         String?
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+  items                 OrderItem[]
+  statusEvents          OrderStatusEvent[]
+}
+
+model OrderItem {
+  id             String  @id @default(uuid())
+  orderId        String
+  order          Order   @relation(fields: [orderId], references: [id])
+  sessionId      String
+  storyId        String
+  bookTitle      String
+  priceCents     Int
+  configSnapshot Json
+  printPageKeys  Json
+  printPdfKey    String?
+}
+
+model OrderStatusEvent {
+  id        String   @id @default(uuid())
+  orderId   String
+  order     Order    @relation(fields: [orderId], references: [id])
+  status    String
+  source    String
+  raw       Json?
+  createdAt DateTime @default(now())
+}
