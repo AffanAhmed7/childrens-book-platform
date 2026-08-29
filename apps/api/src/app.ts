@@ -7,6 +7,7 @@ import { env } from "./env";
 import { registerSessionRoutes } from "./routes/sessions";
 import { registerCheckoutRoutes } from "./routes/checkout";
 import { registerWebhookRoutes } from "./routes/webhooks";
+import { registerOrderRoutes } from "./routes/orders";
 
 export async function buildApp() {
   const app = Fastify({ logger: true }).withTypeProvider<TypeBoxTypeProvider>();
@@ -30,6 +31,7 @@ export async function buildApp() {
 
   await registerSessionRoutes(app);
   await registerCheckoutRoutes(app);
+  await registerOrderRoutes(app);
   await app.register(registerWebhookRoutes);
 
   return app;
