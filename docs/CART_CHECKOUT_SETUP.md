@@ -186,5 +186,105 @@ cd apps/api && npm run homepage
 webhook URLs above can point anywhere but `localhost`. Per prior project
 notes, Railway/Render are reasonable options for `apps/api` (it already has
 real Neon/Upstash/R2 credentials); `apps/web` is a standard Next.js app and
-deploys cleanly to Vercel or similar. Not detailed further here — a separate
-task once you're ready for it.
+deploys cleanly to Vercel or similar. Every "going live" webhook step in §7
+below needs this done first — a webhook can't point at `localhost`.
+
+## 7. Going live — full production checklist, all three platforms
+
+Everything up to here got you a *working, test-mode* integration. This
+section is what actually turns it on for real customers and real money —
+dashboard/account actions on each platform, not code.
+
+### Stripe
+
+1. **Complete business verification**: Dashboard → Settings → Business
+   details. You'll need: legal business name, business type (individual or
+   registered company), industry/category, business address, a tax ID (EIN,
+   VAT number, or your country's equivalent), and the account
+   representative's personal KYC details (legal name, date of birth, home
+   address, and a government ID number — SSN/last-4 in the US, or your
+   country's equivalent).
+2. **Add a payout bank account**: Settings → Payouts → add your bank
+   account. This is where your revenue lands, minus Stripe's fees.
+3. Submit for review. Stripe often approves straightforward businesses
+   quickly; higher-risk categories can take longer.
+4. Once approved, the **Live mode** toggle (top-right) becomes fully usable.
+   Switch to it and get your **live** keys from Developers → API keys:
+   `sk_live_...` and `pk_live_...`.
+5. Put the live keys in your **deployed** environment's env vars (Railway/
+   Render for `apps/api`'s `STRIPE_SECRET_KEY`, Vercel or similar for
+   `apps/web`'s `NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY`) — never in the local
+   `.env` you've been testing with, and never committed to git.
+6. Create a **new, Live-mode** webhook endpoint: Developers → Webhooks → Add
+   endpoint → your deployed API's `https://yourdomain.com/api/webhooks/stripe`
+   → subscribe to at least `payment_intent.succeeded`. This gives you a
+   **new** `whsec_...` — different from the Stripe CLI one you've been using
+   locally — put that in the deployed environment's `STRIPE_WEBHOOK_SECRET`.
+7. Since checkout uses Stripe's own Payment Element (card data never touches
+   your server), you qualify for Stripe's simplest PCI self-assessment
+   (SAQ A) — Stripe's compliance dashboard will prompt for this if it's
+   required for your account, usually a short form.
+8. Do **one real transaction with your own card**, small amount, once
+   deployed — confirm the charge appears in your bank payout and the whole
+   webhook→order flow fires correctly against the live endpoint — before
+   opening checkout to real customers.
+
+### Gelato
+
+1. **Complete company/billing information**: Gelato dashboard → Settings →
+   Company (or Billing) — this is literally what blocked the test order I
+   ran; nothing else in the integration is waiting on code.
+2. **Add a payment method**: Billing → Payment methods → add a card. Gelato
+   charges per order (not a subscription) — this card is billed each time
+   your app successfully dispatches an order.
+3. Review shipping regions/rates for wherever your book ships. The product
+   UID already wired in (§2 above) has zero country restrictions, but
+   confirm Gelato's actual shipping rates/timelines for your target markets
+   match what you'll promise customers.
+4. **Finalize the real page count** for your sellable book(s) — 28 minimum
+   for the wired-in product. Update `apps/api/src/pipeline/catalog.ts`'s
+   `pageIds` once you have real illustrated content at that length (this
+   *is* a code change, but a content-driven one, not a config guess).
+5. Once billing is set up, place **one real test order** — a real address
+   (ship it to yourself), and watch it through to actual delivery. This
+   confirms the full chain works end to end with real money, and gives you
+   real production/shipping timelines to put in the confirmation
+   email/page's "estimated delivery" copy (currently a placeholder
+   "7-10 business days" in `apps/api/src/email/orderConfirmation.ts`).
+6. If Gelato's dashboard offers a webhook signing secret, set
+   `GELATO_WEBHOOK_SECRET` in your deployed environment and register the
+   callback URL (`https://yourdomain.com/api/webhooks/gelato`) in their
+   dashboard.
+7. Watch the first several real orders manually (Gelato's own dashboard +
+   your `/track/[orderId]` pages) until you trust the automated flow.
+8. Sanity-check margin: your book currently charges €34.90
+   (`apps/api/src/pipeline/catalog.ts`'s `priceCents`) — confirm that covers
+   Gelato's per-unit cost + shipping with room to spare, once you know real
+   pricing for your finalized product/page-count.
+
+### Resend
+
+1. **Add and verify your sending domain**: Dashboard → Domains → Add Domain
+   → add the SPF and DKIM DNS records it gives you at your domain's DNS
+   provider (wherever you manage DNS for your domain — Cloudflare, your
+   registrar, etc.). Verification can take minutes to hours.
+2. Once verified, update `RESEND_FROM_ADDRESS` in your **deployed**
+   environment to a real address at that domain (e.g. `orders@yourdomain.com`)
+   — replacing the `onboarding@resend.dev` sandbox sender used for testing.
+3. Send a real test email to an address **outside** your Resend account (a
+   friend, a second personal email) to confirm it actually delivers and
+   doesn't land in spam. If it does, double-check DKIM alignment in Resend's
+   domain settings, and consider adding a DMARC record (start with
+   `p=none` to just monitor, tighten later).
+4. Check Resend's plan limits against your expected email volume — the free
+   tier has a monthly send cap.
+
+### Cross-cutting
+
+- None of the Stripe/Gelato webhook steps above work until `apps/api` has a
+  real public HTTPS URL — deploy first (§6).
+- Every "live"/"production" key replaces its test-mode counterpart **only in
+  the deployed environment's env vars** — keep the test keys in your local
+  `.env` for continued local development.
+- Do a full real walkthrough (real card, real address, real email) once
+  everything above is done, before telling any customer this is live.
