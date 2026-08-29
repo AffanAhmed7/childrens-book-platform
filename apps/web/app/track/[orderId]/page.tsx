@@ -19,32 +19,43 @@ async function getOrder(orderId: string): Promise<OrderView | null> {
 export default async function TrackOrderPage({ params }: { params: { orderId: string } }) {
   const order = await getOrder(params.orderId);
   if (!order) {
-    return <main className="max-w-2xl mx-auto p-8">Order not found.</main>;
+    return (
+      <main className="page page--narrow">
+        <p className="eyebrow">Order tracking</p>
+        <h1 className="page-title">We couldn't find that order</h1>
+        <p className="page-lede">Double-check the link, or the order ID from your confirmation email.</p>
+      </main>
+    );
   }
 
   return (
-    <main className="max-w-2xl mx-auto p-8">
-      <h1 className="font-serif text-3xl mb-2">Track your order</h1>
-      <p className="text-gray-600 mb-6">
-        Order ID: {order.id} · Status: {order.status.replace(/_/g, " ")}
-      </p>
-      <ul className="space-y-2 mb-8">
-        {order.items.map((item) => (
-          <li key={item.id} className="flex justify-between">
-            <span>{item.bookTitle}</span>
-            <span>{formatMoney(item.priceCents, order.currency)}</span>
-          </li>
-        ))}
-      </ul>
-      <h2 className="font-medium mb-3">Status history</h2>
-      <ol className="space-y-3 border-l-2 border-green-700 pl-4">
+    <main className="page page--narrow">
+      <p className="eyebrow">Order tracking</p>
+      <h1 className="page-title">{order.status.replace(/_/g, " ")}</h1>
+      <p className="page-lede">Order <span className="mono-id">{order.id}</span></p>
+
+      <div className="card checkout-panel" style={{ marginBottom: 28 }}>
+        <ul className="checkout-summary__list">
+          {order.items.map((item) => (
+            <li key={item.id}>
+              <span>{item.bookTitle}</span>
+              <span>{formatMoney(item.priceCents, order.currency)}</span>
+            </li>
+          ))}
+        </ul>
+      </div>
+
+      <p className="eyebrow">Status history</p>
+      <ol className="track-timeline">
         {order.statusEvents.length === 0 && (
-          <li className="text-gray-600">Awaiting payment confirmation.</li>
+          <li className="track-timeline__item">
+            <p className="track-timeline__status">Awaiting payment confirmation</p>
+          </li>
         )}
         {order.statusEvents.map((event, i) => (
-          <li key={i}>
-            <p className="font-medium">{event.status.replace(/_/g, " ")}</p>
-            <p className="text-sm text-gray-600">{new Date(event.createdAt).toLocaleString()}</p>
+          <li key={i} className="track-timeline__item">
+            <p className="track-timeline__status">{event.status.replace(/_/g, " ")}</p>
+            <p className="track-timeline__time">{new Date(event.createdAt).toLocaleString()}</p>
           </li>
         ))}
       </ol>

@@ -65,6 +65,16 @@
   .res .dl { display: block; padding: 9px 14px; border-top: 1px solid var(--line);
     font-size: 12.5px; color: var(--accent); text-decoration: none; font-weight: 600; }
 
+  /* Bridges into the branded storefront (apps/web) — deliberately styled in
+     that app's own forest/cream identity, not this tool's indigo, so the
+     handoff reads as "you're leaving the dev harness now." */
+  .cart-cta { display: inline-flex; align-items: center; gap: 6px; margin-top: 10px;
+    background: #3e6a49; color: #faf7f0; padding: 10px 20px; border-radius: 999px;
+    font-size: 13.5px; font-weight: 600; text-decoration: none; letter-spacing: .01em;
+    box-shadow: 0 6px 16px -8px rgba(46,78,53,.6);
+    transition: transform .15s ease, background-color .15s ease; }
+  .cart-cta:hover { background: #2c4e35; transform: translateY(-1px); }
+
   .err { background: #fef2f2; border: 1px solid #fecaca; color: #991b1b;
     padding: 13px 16px; border-radius: 9px; font-size: 14px; margin-bottom: 18px; }
   dialog { border: 0; border-radius: 12px; padding: 0; max-width: 94vw; max-height: 94vh; }
@@ -403,8 +413,8 @@ async function run() {
       const webAppUrl = window.WEB_APP_URL || "http://localhost:3000";
       const cartUrl = webAppUrl + "/cart?add=" + encodeURIComponent(sessionId);
       finish(
-        "Finished in <b>" + fmt(Math.round((Date.now() - started) / 1000)) + "</b> · " +
-          '<a class="dl" href="' + cartUrl + '">Add this book to cart →</a>',
+        "Finished in <b>" + fmt(Math.round((Date.now() - started) / 1000)) + "</b><br>" +
+          '<a class="cart-cta" href="' + cartUrl + '">Add this book to cart →</a>',
       );
     }
   };

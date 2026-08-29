@@ -28,32 +28,41 @@ function ConfirmationInner() {
       .catch(() => setError("We couldn't find that order."));
   }, [orderId]);
 
-  if (!orderId) return <main className="max-w-2xl mx-auto p-8">No order specified.</main>;
-  if (error) return <main className="max-w-2xl mx-auto p-8">{error}</main>;
-  if (!order) return <main className="max-w-2xl mx-auto p-8">Loading your order…</main>;
+  if (!orderId) return <main className="page page--narrow"><p className="page-lede">No order specified.</p></main>;
+  if (error) return <main className="page page--narrow"><p className="page-lede">{error}</p></main>;
+  if (!order) return <main className="page page--narrow"><p className="page-lede">Loading your order…</p></main>;
 
   return (
-    <main className="max-w-2xl mx-auto p-8">
-      <h1 className="font-serif text-3xl mb-2">Order confirmed!</h1>
-      <p className="text-gray-600 mb-6">Order ID: {order.id}</p>
-      <ul className="space-y-2 mb-6">
-        {order.items.map((item) => (
-          <li key={item.id} className="flex justify-between">
-            <span>{item.bookTitle}</span>
-            <span>{formatMoney(item.priceCents, order.currency)}</span>
-          </li>
-        ))}
-      </ul>
-      <p className="font-medium mb-8">Total: {formatMoney(order.totalCents, order.currency)}</p>
-      <div className="rounded-xl border p-4 mb-8">
-        <p className="font-medium mb-1">Your data, protected by design</p>
-        <p className="text-sm text-gray-600">
-          Your uploaded photos are automatically deleted within 24 hours of your order being
-          marked delivered.
+    <main className="page page--narrow">
+      <p className="eyebrow">Order confirmed</p>
+      <h1 className="page-title">Thank you — it's on its way to the printer</h1>
+      <p className="page-lede">Order <span className="mono-id">{order.id}</span></p>
+
+      <div className="card checkout-panel">
+        <ul className="checkout-summary__list">
+          {order.items.map((item) => (
+            <li key={item.id}>
+              <span>{item.bookTitle}</span>
+              <span>{formatMoney(item.priceCents, order.currency)}</span>
+            </li>
+          ))}
+        </ul>
+        <hr className="stitch" style={{ margin: "16px 0" }} />
+        <div className="checkout-summary__total">
+          <span>Total</span>
+          <span>{formatMoney(order.totalCents, order.currency)}</span>
+        </div>
+      </div>
+
+      <div className="trust-note">
+        <p className="trust-note__title">Your data, protected by design</p>
+        <p className="trust-note__body">
+          Your uploaded photos are automatically deleted within 24 hours of your order being marked delivered.
         </p>
       </div>
-      <Link href={`/track/${order.id}`} className="rounded-full bg-green-700 text-white px-6 py-3 font-medium">
-        Track your order →
+
+      <Link href={`/track/${order.id}`} className="btn btn-primary">
+        Track your order <span className="arrow">→</span>
       </Link>
     </main>
   );
@@ -61,7 +70,7 @@ function ConfirmationInner() {
 
 export default function ConfirmationPage() {
   return (
-    <Suspense fallback={<main className="max-w-2xl mx-auto p-8">Loading…</main>}>
+    <Suspense fallback={<main className="page page--narrow"><p className="page-lede">Loading…</p></main>}>
       <ConfirmationInner />
     </Suspense>
   );

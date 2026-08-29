@@ -10,7 +10,22 @@ interface SessionPagesResponse {
   sessionId: string;
   storyId: string;
   title: string;
-  pages: { id: string; url: string | null }[];
+  pages: { id: string; url: string | null; ready: boolean }[];
+}
+
+function BookThumb({ url }: { url: string | null }) {
+  if (url) {
+    // eslint-disable-next-line @next/next/no-img-element
+    return <img src={url} alt="" className="cart-thumb" />;
+  }
+  return (
+    <div className="cart-thumb cart-thumb--placeholder" aria-hidden="true">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none">
+        <path d="M12 6.5C10.5 5 8 4.5 4 4.8V18c4-.3 6.5.2 8 1.7 1.5-1.5 4-2 8-1.7V4.8c-4-.3-6.5.2-8 1.7Z" stroke="currentColor" strokeWidth="1.6" strokeLinejoin="round" />
+        <path d="M12 6.5V19.7" stroke="currentColor" strokeWidth="1.6" />
+      </svg>
+    </div>
+  );
 }
 
 function CartPageInner() {
@@ -53,37 +68,55 @@ function CartPageInner() {
 
   const totalCents = items.reduce((sum, item) => sum + (BOOK_PRICES_CENTS[item.storyId] ?? 0), 0);
 
-  if (loading) return <main className="max-w-2xl mx-auto p-8">Loading your cart…</main>;
+  if (loading) {
+    return (
+      <main className="page">
+        <p className="page-lede">Loading your cart…</p>
+      </main>
+    );
+  }
 
   return (
-    <main className="max-w-2xl mx-auto p-8">
-      <h1 className="font-serif text-3xl mb-6">Your cart</h1>
+    <main className="page">
+      <p className="eyebrow">Your cart</p>
+      <h1 className="page-title">
+        {items.length === 0 ? "Nothing here yet" : `${items.length} ${items.length === 1 ? "book" : "books"} ready for print`}
+      </h1>
+
       {items.length === 0 ? (
         <>
-          <p className="mb-6">Your cart is empty for now.</p>
-          <Link href="/" className="rounded-full bg-green-700 text-white px-6 py-3 font-medium">
-            Browse the stories
+          <p className="page-lede">Personalise a story and it will land here, ready for checkout.</p>
+          <Link href="/" className="btn btn-primary">
+            Browse the stories <span className="arrow">→</span>
           </Link>
         </>
       ) : (
         <>
-          <ul className="space-y-4">
-            {items.map((item) => (
-              <li key={item.sessionId} className="flex items-center justify-between border rounded-xl p-4">
-                <div>
-                  <p className="font-medium">{item.title}</p>
-                  <p className="text-sm text-gray-600">{formatMoney(BOOK_PRICES_CENTS[item.storyId] ?? 0)}</p>
-                </div>
-                <button onClick={() => handleRemove(item.sessionId)} className="text-sm underline">
-                  Remove
-                </button>
-              </li>
-            ))}
+          <ul className="cart-list">
+            {items.map((item) => {
+              const cover = item.pages.find((p) => p.ready && p.url)?.url ?? null;
+              return (
+                <li key={item.sessionId} className="card cart-item">
+                  <BookThumb url={cover} />
+                  <div className="cart-item__body">
+                    <p className="cart-item__title">{item.title}</p>
+                    <p className="cart-item__price">{formatMoney(BOOK_PRICES_CENTS[item.storyId] ?? 0)}</p>
+                  </div>
+                  <button onClick={() => handleRemove(item.sessionId)} className="cart-item__remove" aria-label={`Remove ${item.title}`}>
+                    Remove
+                  </button>
+                </li>
+              );
+            })}
           </ul>
-          <div className="mt-6 flex items-center justify-between">
-            <p className="font-medium">Total: {formatMoney(totalCents)}</p>
-            <Link href="/checkout" className="rounded-full bg-green-700 text-white px-6 py-3 font-medium">
-              Proceed to checkout →
+
+          <div className="cart-summary">
+            <div>
+              <p className="cart-summary__label">Total</p>
+              <p className="cart-summary__value">{formatMoney(totalCents)}</p>
+            </div>
+            <Link href="/checkout" className="btn btn-primary">
+              Proceed to checkout <span className="arrow">→</span>
             </Link>
           </div>
         </>
@@ -94,7 +127,7 @@ function CartPageInner() {
 
 export default function CartPage() {
   return (
-    <Suspense fallback={<main className="max-w-2xl mx-auto p-8">Loading…</main>}>
+    <Suspense fallback={<main className="page"><p className="page-lede">Loading…</p></main>}>
       <CartPageInner />
     </Suspense>
   );
