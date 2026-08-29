@@ -1,5 +1,5 @@
-import { Queue } from "bullmq";
-import { createQueueRedisConnection } from "./redis";
+import { Queue, QueueEvents } from "bullmq";
+import { createQueueRedisConnection, createRedisConnection } from "./redis";
 
 export const PIPELINE_QUEUE_NAME = "pipeline";
 
@@ -20,4 +20,13 @@ export function getPipelineQueue(): Queue<PipelineJobData> {
     connection: createQueueRedisConnection(),
   });
   return queueSingleton;
+}
+
+let queueEventsSingleton: QueueEvents | undefined;
+
+export function getPipelineQueueEvents(): QueueEvents {
+  queueEventsSingleton ??= new QueueEvents(PIPELINE_QUEUE_NAME, {
+    connection: createRedisConnection(),
+  });
+  return queueEventsSingleton;
 }
