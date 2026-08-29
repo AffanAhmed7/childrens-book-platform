@@ -47,7 +47,6 @@ must be implemented first — every page here calls its endpoints.
 - Create: `apps/web/tsconfig.json`
 - Create: `apps/web/next.config.mjs`
 - Create: `apps/web/postcss.config.mjs`
-- Create: `apps/web/tailwind.config.ts`
 - Create: `apps/web/app/layout.tsx`
 - Create: `apps/web/app/globals.css`
 - Create: `apps/web/app/page.tsx`
@@ -65,8 +64,20 @@ must be implemented first — every page here calls its endpoints.
 cd apps/web
 npm init -y
 npm install next@^14 react@^18 react-dom@^18 @stripe/stripe-js @stripe/react-stripe-js
-npm install -D typescript @types/node @types/react @types/react-dom tailwindcss postcss autoprefixer
+npm install -D @types/node @types/react@^18 @types/react-dom@^18 tailwindcss postcss @tailwindcss/postcss
+# Pin TypeScript to the 5.x line — npm's "latest" resolved a v7 whose package
+# layout crashes Next.js 14.2's TypeScript-detection code at dev-server boot
+# (confirmed live: "TypeError: Cannot read properties of undefined (reading
+# 'endsWith')" inside verify-typescript-setup.js). Match apps/api's version.
+npm install -D typescript@^5.7.2
 ```
+
+Also note: npm resolves `tailwindcss` to v4 as of this writing, not v3 — v4
+uses CSS-first theming (no `tailwind.config.ts`) and its own PostCSS plugin
+package (`@tailwindcss/postcss`, installed above), which the steps below
+already account for. If a future `npm install` resolves v3 instead, the
+`@theme` block in Step 6 won't apply — check the installed major version
+before assuming either config style.
 
 - [ ] **Step 2: Write `package.json`**
 
@@ -123,51 +134,38 @@ const nextConfig = {};
 export default nextConfig;
 ```
 
-- [ ] **Step 5: Write `postcss.config.mjs` and `tailwind.config.ts`**
+- [ ] **Step 5: Write `postcss.config.mjs`**
 
-`apps/web/postcss.config.mjs`:
+`apps/web/postcss.config.mjs` — Tailwind v4 ships its own PostCSS plugin
+(Lightning CSS under the hood, which also handles vendor prefixing) — no
+separate autoprefixer needed:
 ```js
 export default {
   plugins: {
-    tailwindcss: {},
-    autoprefixer: {},
+    "@tailwindcss/postcss": {},
   },
 };
-```
-
-`apps/web/tailwind.config.ts`:
-```ts
-import type { Config } from "tailwindcss";
-
-const config: Config = {
-  content: ["./app/**/*.{ts,tsx}"],
-  theme: {
-    extend: {
-      colors: {
-        cream: "#FAF7F2",
-        ink: "#3D2B1F",
-        accent: "#E8C5A0",
-      },
-      fontFamily: {
-        serif: ["Playfair Display", "Georgia", "serif"],
-      },
-    },
-  },
-  plugins: [],
-};
-export default config;
 ```
 
 - [ ] **Step 6: Write `app/globals.css`**
 
+Tailwind v4 config lives in CSS via `@theme`, not `tailwind.config.ts` —
+this registers `bg-cream`, `text-ink`, `font-serif`, etc. as real utility
+classes:
+
 ```css
-@tailwind base;
-@tailwind components;
-@tailwind utilities;
+@import "tailwindcss";
+
+@theme {
+  --color-cream: #faf7f2;
+  --color-ink: #3d2b1f;
+  --color-accent: #e8c5a0;
+  --font-serif: "Playfair Display", Georgia, serif;
+}
 
 body {
-  background-color: #faf7f2;
-  color: #3d2b1f;
+  background-color: var(--color-cream);
+  color: var(--color-ink);
 }
 ```
 
