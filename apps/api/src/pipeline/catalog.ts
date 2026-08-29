@@ -69,6 +69,8 @@ export interface BookConfig {
   title: string;
   /** Page ids, in reading order. */
   pageIds: string[];
+  /** Retail price in cents. Integer, never a float — avoids rounding bugs. */
+  priceCents: number;
 }
 
 const ASSETS = path.resolve(process.cwd(), "../../assets/templates");
@@ -135,10 +137,12 @@ export const BOOKS: Record<string, BookConfig> = {
   "demo-book": {
     title: "Demo book — one child",
     pageIds: ["workshop", "astronaut", "plane"],
+    priceCents: 3490,
   },
   "demo-book-duo": {
     title: "Demo book — two children",
     pageIds: ["newtemp", "newtemp2"],
+    priceCents: 3490,
   },
 };
 
