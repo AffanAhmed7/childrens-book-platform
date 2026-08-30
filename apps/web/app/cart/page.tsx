@@ -5,6 +5,7 @@ import Link from "next/link";
 import { addSessionToCart, getCartSessionIds, removeSessionFromCart } from "@/lib/cart";
 import { apiGet } from "@/lib/api";
 import { BOOK_PRICES_CENTS, formatMoney } from "@/lib/pricing";
+import { BookPreviewModal } from "@/components/BookPreviewModal";
 
 interface SessionPagesResponse {
   sessionId: string;
@@ -33,6 +34,7 @@ function CartPageInner() {
   const searchParams = useSearchParams();
   const [items, setItems] = useState<SessionPagesResponse[]>([]);
   const [loading, setLoading] = useState(true);
+  const [previewSessionId, setPreviewSessionId] = useState<string | null>(null);
 
   useEffect(() => {
     const addId = searchParams.get("add");
@@ -102,6 +104,13 @@ function CartPageInner() {
                     <p className="cart-item__title">{item.title}</p>
                     <p className="cart-item__price">{formatMoney(BOOK_PRICES_CENTS[item.storyId] ?? 0)}</p>
                   </div>
+                  <button
+                    onClick={() => setPreviewSessionId(item.sessionId)}
+                    className="cart-item__preview"
+                    aria-label={`Preview ${item.title}`}
+                  >
+                    Preview book
+                  </button>
                   <button onClick={() => handleRemove(item.sessionId)} className="cart-item__remove" aria-label={`Remove ${item.title}`}>
                     Remove
                   </button>
@@ -120,6 +129,10 @@ function CartPageInner() {
             </Link>
           </div>
         </>
+      )}
+
+      {previewSessionId && (
+        <BookPreviewModal sessionId={previewSessionId} onClose={() => setPreviewSessionId(null)} />
       )}
     </main>
   );

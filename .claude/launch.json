@@ -64,6 +64,13 @@
       "runtimeArgs": ["run", "homepage:local"],
       "cwd": "apps/api",
       "port": 5179
+    },
+    {
+      "name": "web-dev",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["run", "dev"],
+      "cwd": "apps/web",
+      "port": 3000
     }
   ]
 }

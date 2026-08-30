@@ -6,6 +6,7 @@ import { Elements, PaymentElement, useStripe, useElements } from "@stripe/react-
 import { getCartSessionIds } from "@/lib/cart";
 import { apiGet, apiPost } from "@/lib/api";
 import { BOOK_PRICES_CENTS, formatMoney } from "@/lib/pricing";
+import { BookPreviewModal } from "@/components/BookPreviewModal";
 
 const stripePromise = loadStripe(process.env.NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY ?? "");
 
@@ -73,13 +74,24 @@ function PaymentStep({ orderId }: { orderId: string }) {
 }
 
 function OrderSummary({ items, totalCents }: { items: SessionPagesResponse[]; totalCents: number }) {
+  const [previewSessionId, setPreviewSessionId] = useState<string | null>(null);
+
   return (
     <aside className="checkout-summary card">
       <p className="eyebrow">Order summary</p>
       <ul className="checkout-summary__list">
         {items.map((item) => (
           <li key={item.sessionId}>
-            <span>{item.title}</span>
+            <span>
+              {item.title}{" "}
+              <button
+                type="button"
+                className="checkout-summary__preview"
+                onClick={() => setPreviewSessionId(item.sessionId)}
+              >
+                Preview
+              </button>
+            </span>
             <span>{formatMoney(BOOK_PRICES_CENTS[item.storyId] ?? 0)}</span>
           </li>
         ))}
@@ -89,6 +101,10 @@ function OrderSummary({ items, totalCents }: { items: SessionPagesResponse[]; to
         <span>Total</span>
         <span>{formatMoney(totalCents)}</span>
       </div>
+
+      {previewSessionId && (
+        <BookPreviewModal sessionId={previewSessionId} onClose={() => setPreviewSessionId(null)} />
+      )}
     </aside>
   );
 }
