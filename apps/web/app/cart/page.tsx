@@ -99,21 +99,25 @@ function CartPageInner() {
               const cover = item.pages.find((p) => p.ready && p.url)?.url ?? null;
               return (
                 <li key={item.sessionId} className="card cart-item">
-                  <BookThumb url={cover} />
-                  <div className="cart-item__body">
-                    <p className="cart-item__title">{item.title}</p>
-                    <p className="cart-item__price">{formatMoney(BOOK_PRICES_CENTS[item.storyId] ?? 0)}</p>
+                  <div className="cart-item__main">
+                    <BookThumb url={cover} />
+                    <div className="cart-item__body">
+                      <p className="cart-item__title">{item.title}</p>
+                      <p className="cart-item__price">{formatMoney(BOOK_PRICES_CENTS[item.storyId] ?? 0)}</p>
+                    </div>
                   </div>
-                  <button
-                    onClick={() => setPreviewSessionId(item.sessionId)}
-                    className="cart-item__preview"
-                    aria-label={`Preview ${item.title}`}
-                  >
-                    Preview book
-                  </button>
-                  <button onClick={() => handleRemove(item.sessionId)} className="cart-item__remove" aria-label={`Remove ${item.title}`}>
-                    Remove
-                  </button>
+                  <div className="cart-item__actions">
+                    <button
+                      onClick={() => setPreviewSessionId(item.sessionId)}
+                      className="cart-item__preview"
+                      aria-label={`Preview ${item.title}`}
+                    >
+                      Preview book
+                    </button>
+                    <button onClick={() => handleRemove(item.sessionId)} className="cart-item__remove" aria-label={`Remove ${item.title}`}>
+                      Remove
+                    </button>
+                  </div>
                 </li>
               );
             })}

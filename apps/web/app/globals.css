@@ -270,8 +270,23 @@ h1, h2, h3 {
 .cart-item {
   display: flex;
   align-items: center;
-  gap: 16px;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 14px;
   padding: 14px;
+}
+.cart-item__main {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  flex: 1 1 auto;
+  min-width: 220px;
+}
+.cart-item__actions {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex-shrink: 0;
 }
 .cart-thumb {
   width: 56px;
