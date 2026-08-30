@@ -259,6 +259,15 @@ h1, h2, h3 {
 }
 
 /* ---------- Cart ---------- */
+.empty-state {
+  text-align: center;
+  padding: 48px 0 8px;
+}
+.empty-state .page-lede {
+  margin-left: auto;
+  margin-right: auto;
+}
+
 .cart-list {
   list-style: none;
   margin: 0 0 28px;

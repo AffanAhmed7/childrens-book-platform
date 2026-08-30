@@ -78,62 +78,66 @@ function CartPageInner() {
     );
   }
 
-  return (
-    <main className="page">
-      <p className="eyebrow">Your cart</p>
-      <h1 className="page-title">
-        {items.length === 0 ? "Nothing here yet" : `${items.length} ${items.length === 1 ? "book" : "books"} ready for print`}
-      </h1>
-
-      {items.length === 0 ? (
-        <>
+  if (items.length === 0) {
+    return (
+      <main className="page">
+        <div className="empty-state">
+          <p className="eyebrow">Your cart</p>
+          <h1 className="page-title">Nothing here yet</h1>
           <p className="page-lede">Personalise a story and it will land here, ready for checkout.</p>
           <Link href="/" className="btn btn-primary">
             Browse the stories <span className="arrow">→</span>
           </Link>
-        </>
-      ) : (
-        <>
-          <ul className="cart-list">
-            {items.map((item) => {
-              const cover = item.pages.find((p) => p.ready && p.url)?.url ?? null;
-              return (
-                <li key={item.sessionId} className="card cart-item">
-                  <div className="cart-item__main">
-                    <BookThumb url={cover} />
-                    <div className="cart-item__body">
-                      <p className="cart-item__title">{item.title}</p>
-                      <p className="cart-item__price">{formatMoney(BOOK_PRICES_CENTS[item.storyId] ?? 0)}</p>
-                    </div>
-                  </div>
-                  <div className="cart-item__actions">
-                    <button
-                      onClick={() => setPreviewSessionId(item.sessionId)}
-                      className="cart-item__preview"
-                      aria-label={`Preview ${item.title}`}
-                    >
-                      Preview book
-                    </button>
-                    <button onClick={() => handleRemove(item.sessionId)} className="cart-item__remove" aria-label={`Remove ${item.title}`}>
-                      Remove
-                    </button>
-                  </div>
-                </li>
-              );
-            })}
-          </ul>
+        </div>
+      </main>
+    );
+  }
 
-          <div className="cart-summary">
-            <div>
-              <p className="cart-summary__label">Total</p>
-              <p className="cart-summary__value">{formatMoney(totalCents)}</p>
-            </div>
-            <Link href="/checkout" className="btn btn-primary">
-              Proceed to checkout <span className="arrow">→</span>
-            </Link>
-          </div>
-        </>
-      )}
+  return (
+    <main className="page">
+      <p className="eyebrow">Your cart</p>
+      <h1 className="page-title">
+        {items.length} {items.length === 1 ? "book" : "books"} ready for print
+      </h1>
+
+      <ul className="cart-list">
+        {items.map((item) => {
+          const cover = item.pages.find((p) => p.ready && p.url)?.url ?? null;
+          return (
+            <li key={item.sessionId} className="card cart-item">
+              <div className="cart-item__main">
+                <BookThumb url={cover} />
+                <div className="cart-item__body">
+                  <p className="cart-item__title">{item.title}</p>
+                  <p className="cart-item__price">{formatMoney(BOOK_PRICES_CENTS[item.storyId] ?? 0)}</p>
+                </div>
+              </div>
+              <div className="cart-item__actions">
+                <button
+                  onClick={() => setPreviewSessionId(item.sessionId)}
+                  className="cart-item__preview"
+                  aria-label={`Preview ${item.title}`}
+                >
+                  Preview book
+                </button>
+                <button onClick={() => handleRemove(item.sessionId)} className="cart-item__remove" aria-label={`Remove ${item.title}`}>
+                  Remove
+                </button>
+              </div>
+            </li>
+          );
+        })}
+      </ul>
+
+      <div className="cart-summary">
+        <div>
+          <p className="cart-summary__label">Total</p>
+          <p className="cart-summary__value">{formatMoney(totalCents)}</p>
+        </div>
+        <Link href="/checkout" className="btn btn-primary">
+          Proceed to checkout <span className="arrow">→</span>
+        </Link>
+      </div>
 
       {previewSessionId && (
         <BookPreviewModal sessionId={previewSessionId} onClose={() => setPreviewSessionId(null)} />
